@@ -1,0 +1,17 @@
+{
+  "name": "청진노트 · 간호학 시험공부",
+  "short_name": "청진노트",
+  "description": "간격 반복, 암기 요령, 문제풀이로 공부하는 간호학 시험 대비 앱",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#edf3f2",
+  "theme_color": "#0b766e",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
