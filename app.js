@@ -1,4 +1,4 @@
-/* 청진노트 v2 · 앱 동작 (모든 과목 공통)
+/* 청진노트 · 앱 동작 (모든 과목 공통)
  * 과목 내용은 subjects 폴더에 있고, 이 파일은 고칠 일이 거의 없습니다.
  * 기록은 이 기기 브라우저(localStorage)와 IndexedDB(내 그림)에만 저장됩니다.
  */
@@ -39,16 +39,17 @@ function nospace(s){ return String(s || '').replace(/\s+/g, ''); }
 /* ───────── 저장 ───────── */
 function freshSubj(){
   return { c: {}, q: {}, cw: {}, edits: {}, mine: {}, flags: {}, ill: {}, tbl: {}, ord: {}, exams: [], custom: [],
-    mnr: {}, figTodo: {}, figAsked: {}, figp: {}, known: null, snap: {}, d: {}, ses: null, qz: null, lastUse: 0 };
+    mnr: {}, figTodo: {}, figAsked: {}, figp: {}, known: null, snap: {}, d: {}, ses: null, qz: null, scope: null, lastUse: 0,
+    mode: 'all', noAdd: false, cramAt: 0, qe: {}, qh: {}, myc: [] };
 }
 function fresh(){
   return { v: 2, cur: null, route: null,
-    set: { scale: 1, theme: '', figAsk: true, noteRange: 'all', noteMode: 'mn', noteView: 'sheet', noteZoom: 'fit', qAll: false },
-    log: {}, subj: {}, gq: {}, gdraft: null, created: Date.now(), lastBackup: 0 };
+    set: { scale: 1, theme: '', figAsk: true, noteRange: 'all', noteMode: 'mn', noteView: 'sheet', noteZoom: 'fit', qAll: false, order: 'toc', hideSubj: {} },
+    log: {}, subj: {}, gq: {}, gdraft: null, sums: {}, created: Date.now(), lastBackup: 0 };
 }
 function normalize(o){
   const f = fresh(); const set = Object.assign(f.set, o.set || {});
-  o = Object.assign(f, o); o.set = set; o.subj = o.subj || {};
+  o = Object.assign(f, o); o.set = set; o.subj = o.subj || {}; o.sums = o.sums || {}; set.hideSubj = set.hideSubj || {};
   Object.keys(o.subj).forEach(k => { o.subj[k] = Object.assign(freshSubj(), o.subj[k]); });
   return o;
 }
@@ -92,15 +93,35 @@ function tick(){
 /* ───────── 과목 내용 ───────── */
 const SUB = {}; let ORDER = []; const LOADERR = [];
 let X = null;
-function buildSubject(def){
-  const x = { id: def.id, title: def.title || def.id, def, version: def.version || 1, units: def.units || [], concepts: [], cmap: {}, umap: {}, qs: [], qmap: {},
+const clampPr = n => Math.min(3, Math.max(1, Math.round(+n) || 2));
+/* 반영 파일(subjects/과목id-fix.js)의 고친 내용을 과목 내용에 먼저 적용 */
+function patchDef(def, fx){
+  if (!fx) return;
+  (fx.add || []).forEach(a => {
+    const u = (def.units || []).find(z => z.id === a.u); if (!u || !a.id) return;
+    u.concepts = u.concepts || []; if (u.concepts.some(c => c.id === a.id)) return;
+    u.concepts.push(Object.assign({}, a, { fixAdd: true }));
+  });
+  const cm = {}; (def.units || []).forEach(u => (u.concepts || []).forEach(c => { cm[c.id] = c; }));
+  Object.keys(fx.concepts || {}).forEach(id => { if (cm[id]) Object.assign(cm[id], fx.concepts[id]); });
+}
+function buildSubject(def, fx){
+  patchDef(def, fx);
+  const af = +def.addFrom || 3; /* 이 차수부터 '추가' 표시 */
+  const isNew = o => (+o.v || 0) >= af;
+  const x = { id: def.id, title: def.title || def.id, def, fix: fx || null, version: def.version || 1, units: def.units || [], concepts: [], cmap: {}, umap: {}, qs: [], qmap: {},
     tables: def.tables || [], orders: def.orders || [], pairs: def.pairs || [], numbers: def.numbers || [] };
   x.units.forEach((u, ui) => {
-    u.n = ui + 1; x.umap[u.id] = u;
-    (u.concepts || []).forEach((c, ci) => { c.u = u.id; c.n = ci + 1; c.sum = c.sum || []; c.mn = c.mn || []; c.cards = c.cards || []; x.concepts.push(c); x.cmap[c.id] = c; });
+    u.n = ui + 1; x.umap[u.id] = u; u.concepts = u.concepts || [];
+    u.concepts.forEach((c, ci) => { c.u = u.id; c.n = ci + 1; c.sum = c.sum || []; c.mn = c.mn || []; c.cards = c.cards || []; c.pr = clampPr(c.pr || (c.imp ? 3 : 2)); c.add = isNew(c) || !!c.fixAdd; x.concepts.push(c); x.cmap[c.id] = c; });
   });
+  x.tables.concat(x.orders, x.pairs).forEach(t => { t.add = isNew(t); });
+  x.numbers.forEach(n => { n.add = !!n.v3 || (+n.ver || 0) >= af; });
+  /* 표·순서·쌍·숫자는 단원 순서로 (추가된 것도 제 단원 자리에) */
+  const ui = id => { const u = x.umap[id]; return u ? u.n : 99; };
+  ['tables', 'orders', 'pairs', 'numbers'].forEach(k => { x[k] = x[k].slice().sort((a, b) => ui(a.u) - ui(b.u)); });
   x.concepts.forEach(c => (c.ox || []).forEach((o, i) => {
-    const q = { id: c.id + '-ox' + (i + 1), type: 'ox', q: o[0], o: ['O', 'X'], a: o[1] ? 0 : 1, e: o[2], c: [c.id], u: c.u, lv: 1 };
+    const q = { id: c.id + '-ox' + (i + 1), type: 'ox', q: o[0], o: ['O', 'X'], a: o[1] ? 0 : 1, e: o[2], c: [c.id], u: c.u, lv: 1, v: c.v, add: c.add };
     x.qs.push(q); x.qmap[q.id] = q;
   }));
   const addMC = (q, uidd) => {
@@ -108,20 +129,115 @@ function buildSubject(def){
     const y = Object.assign({ type: 'mc' }, q);
     y.u = q.u || uidd;
     y.c = (Array.isArray(q.c) ? q.c : (q.c ? [q.c] : [])).filter(id => x.cmap[id]).slice(0, 4);
-    y.lv = q.lv || (q.case ? 2 : 1);
+    y.lv = q.lv || (q.case ? 2 : 1); y.add = isNew(q);
     if (!y.u && y.c.length) y.u = x.cmap[y.c[0]].u;
     x.qs.push(y); x.qmap[y.id] = y;
   };
   x.units.forEach(u => (u.qs || []).forEach(q => addMC(q, u.id)));
   (def.extraQs || []).forEach(q => addMC(q, q.u));
+  if (fx) {
+    Object.keys(fx.qs || {}).forEach(id => { if (x.qmap[id]) Object.assign(x.qmap[id], fx.qs[id]); });
+    const hid = new Set(fx.hide || []); if (hid.size) x.qs = x.qs.filter(q => !hid.has(q.id)); /* 뺀 문제: 목록에서만 빼요 */
+  }
   x.mcN = x.qs.filter(q => q.type === 'mc').length;
   return x;
 }
+function isAdd(o){ return !!(o && o.add); }
+
+/* ───────── 과목 불러오기: 그 과목에 들어갈 때만 ───────── */
+const LOADED = new Set(), LOADING = {};
+function listItem(sid){ return (window.NSA_LIST || []).find(i => i && i.id === sid) || null; }
+function subjFiles(it){ return Array.isArray(it.files) && it.files.length ? it.files : ['subjects/' + it.id + '.js']; }
+function addErr(m){ if (!LOADERR.includes(m)) LOADERR.push(m); }
+function ensureSubject(sid){
+  if (SUB[sid]) return Promise.resolve(true);
+  if (LOADING[sid]) return LOADING[sid];
+  const it = listItem(sid); if (!it) return Promise.resolve(false);
+  LOADING[sid] = (async () => {
+    let miss = false;
+    for (const f of subjFiles(it)) { if (LOADED.has(f)) continue; try { await loadScript(f); LOADED.add(f); } catch (e) { miss = true; addErr((it.title || sid) + ': ' + f + ' 파일을 찾지 못했어요 (GitHub에 올렸는지, 이름이 맞는지 확인)'); } }
+    const fxf = 'subjects/' + sid + '-fix.js'; /* 고친 내용 반영 파일 (있을 때만) */
+    if (it.fix !== false && !LOADED.has(fxf)) { LOADED.add(fxf); try { await loadScript(fxf); } catch (e) {} }
+    const reg = window.NSA || {}; const d = reg.subjects && reg.subjects[sid];
+    if (d && d.units && d.units.length) { try { const x = buildSubject(d, (reg.fixes || {})[sid]); x.meta = it; SUB[sid] = x; applyLocal(x); } catch (e) { try { console.error(e); } catch (z) {} } }
+    if (!SUB[sid] && !miss) addErr((it.title || sid) + ' 과목 파일 (형식 오류가 있는지 확인)');
+    delete LOADING[sid];
+    return !!SUB[sid];
+  })();
+  return LOADING[sid];
+}
+async function ensureAll(){ for (const id of ORDER) await ensureSubject(id); }
+function loadedIds(){ return ORDER.filter(id => SUB[id]); }
+
+/* ───────── 이 기기에서 고친 내용 겹쳐 적용 (개념 제목·중요도, 내 개념, 문제) ───────── */
+const same = (a, b) => JSON.stringify(a == null ? null : a) === JSON.stringify(b == null ? null : b);
+const mnKS = m => (m || []).map(z => [z.k || '', z.s || '']);
+function cleanLocal(x, s){
+  /* 반영 파일로 이미 모두에게 들어간 내 수정은 저절로 정리돼요 */
+  s.myc = (s.myc || []).filter(m => !(x.cmap[m.id] && !x.cmap[m.id].mine));
+  Object.keys(s.edits || {}).forEach(id => {
+    const b = x.cmap[id]; if (!b || b.mine) return; const e = s.edits[id]; const o = b.o0 || b;
+    const eq = (e.ex == null || e.ex === b.ex) && (e.sum == null || same(e.sum, b.sum)) && (e.mn == null || same(mnKS(e.mn), mnKS(b.mn))) &&
+      (e.t == null || e.t === o.t) && (e.pr == null || +e.pr === o.pr) && (e.note == null || (e.note || '') === (b.note || ''));
+    if (eq) delete s.edits[id];
+  });
+  Object.keys(s.qe || {}).forEach(id => { const b = (x.qbase && x.qbase[id]) || x.qmap[id]; if (!b) return; const e = s.qe[id]; if (Object.keys(e).every(k => same(e[k], b[k]))) delete s.qe[id]; });
+  Object.keys(s.qh || {}).forEach(id => { if (x.qmap[id] && !x.qs.some(q => q.id === id && !q.mine)) delete s.qh[id]; });
+}
+function applyLocal(x){
+  x = x || X; if (!x) return; const s = SS(x.id);
+  x.qbase = x.qbase || {};
+  Object.keys(x.qbase).forEach(id => { const b = x.qbase[id]; const i = x.qs.indexOf(x.qmap[id]); if (i >= 0) x.qs[i] = b; x.qmap[id] = b; });
+  x.qbase = {};
+  x.concepts.forEach(c => { if (c.o0) { c.t = c.o0.t; c.pr = c.o0.pr; delete c.o0; } });
+  cleanLocal(x, s);
+  /* 내 개념 */
+  x.units.forEach(u => { u.concepts = u.concepts.filter(c => !c.mine); });
+  Object.keys(x.cmap).forEach(k => { if (x.cmap[k].mine) delete x.cmap[k]; });
+  x.qs = x.qs.filter(q => !q.mine); Object.keys(x.qmap).forEach(k => { if (x.qmap[k].mine) delete x.qmap[k]; });
+  (s.myc || []).forEach(m => {
+    const u = x.umap[m.u]; if (!u || x.cmap[m.id]) return;
+    const c = { id: m.id, t: m.t || '내 개념', pr: clampPr(m.pr), ex: m.ex || '', sum: m.sum || [], mn: m.mn || [], cards: [], kw: m.kw || [], ox: m.ox || [], note: m.note || '', u: u.id, mine: true, add: false, ts: m.ts };
+    u.concepts.push(c); x.cmap[c.id] = c;
+    c.ox.forEach((o, i) => { const q = { id: c.id + '-ox' + (i + 1), type: 'ox', q: o[0], o: ['O', 'X'], a: o[1] ? 0 : 1, e: o[2] || '', c: [c.id], u: c.u, lv: 1, mine: true }; x.qs.push(q); x.qmap[q.id] = q; });
+  });
+  x.concepts = []; x.units.forEach(u => { u.concepts.forEach((c, i) => { c.n = i + 1; }); x.concepts.push.apply(x.concepts, u.concepts); });
+  /* 개념 제목·중요도 */
+  Object.keys(s.edits || {}).forEach(id => { const c = x.cmap[id], e = s.edits[id]; if (!c || c.mine || (e.t == null && e.pr == null)) return; c.o0 = { t: c.t, pr: c.pr }; if (e.t) c.t = e.t; if (e.pr) c.pr = clampPr(e.pr); });
+  /* 문제 고치기 */
+  Object.keys(s.qe || {}).forEach(id => { const b = x.qmap[id]; if (!b || b.mine) return; const y = Object.assign({}, b, s.qe[id], { edited: true }); x.qbase[id] = b; const i = x.qs.indexOf(b); if (i >= 0) x.qs[i] = y; x.qmap[id] = y; });
+}
+
+/* ───────── 공부 모드: 중요도 범위 + 추가 내용 ───────── */
+const MODES = {
+  cram: { min: 3, name: '당일치기', range: '★★★만', desc: '★★★ 자주 출제만 · 하루 안에 몰아서 복습' },
+  core: { min: 2, name: '핵심', range: '★★ 이상', desc: '★★ 이상 · 중요한 것부터 · 날짜 간격 복습' },
+  all: { min: 1, name: '전체', range: '전체', desc: '모든 개념 · 날짜 간격 복습' }
+};
+function modeOf(sid){ const s = S.subj[sid || (X && X.id)]; return s && MODES[s.mode] ? s.mode : 'all'; }
+function addOff(sid){ const s = S.subj[sid || (X && X.id)]; return !!(s && s.noAdd); }
+function inRange(c){ return !!c && c.pr >= MODES[modeOf()].min && !(c.add && addOff()); }
+function CS(){ return X.concepts.filter(inRange); }
+function UC(u){ return u.concepts.filter(inRange); }
+function addVisible(c){ return !(c.add && addOff()); }
+function scopeSet(){ const sc = scopeIds(); return sc ? new Set(sc) : null; }
+function qIn(q){
+  if (q.gc || q.src === 'custom') return true;
+  if (SS().qh[q.id]) return false; if (q.add && addOff()) return false;
+  return links(q).every(id => { const c = X.cmap[id]; return !c || inRange(c); });
+}
+/* 당일치기: 배운 직후 → 10분 → 1시간 → 3시간 → 다음 날 아침 */
+const CRAM = [10 * MIN, HOUR, 3 * HOUR], DONE = 9e15;
+function cramOn(){ return modeOf() === 'cram'; }
+function cramDue(s){ return s.cr === (SS().cramAt || 0) ? (s.cd || 0) : 0; }
+function cramNext(step, now){ if (step < CRAM.length) return now + CRAM[step]; if (step === CRAM.length) { const m = sod(now) + 7 * HOUR; return new Date(now).getHours() < 4 ? m : m + DAY; } return DONE; }
+function cramSet(s, step, now){ s.cr = SS().cramAt || 0; s.cs = step; s.cd = cramNext(step, now); }
+function dueAt(id){ const s = crec(id); if (!s) return 0; return cramOn() ? cramDue(s) : s.due; }
 function SS(sid){ sid = sid || (X && X.id); return S.subj[sid] || (S.subj[sid] = freshSubj()); }
 function cOf(sid, cid){
   const x = SUB[sid]; if (!x) return null; const b = x.cmap[cid]; if (!b) return null;
   const e = S.subj[sid] && S.subj[sid].edits[cid];
-  return e ? Object.assign({}, b, { ex: e.ex != null ? e.ex : b.ex, sum: e.sum || b.sum, mn: e.mn || b.mn, edited: true }) : b;
+  return e ? Object.assign({}, b, { ex: e.ex != null ? e.ex : b.ex, sum: e.sum || b.sum, mn: e.mn || b.mn, note: e.note != null ? e.note : b.note, edited: true }) : b;
 }
 function C(id){ return cOf(X.id, id); }
 function mnList(c, sid){
@@ -140,20 +256,53 @@ function status(id){ const s = crec(id); if (!s || !s.learned) return 'new'; if 
 function nextDue(step, now){ if (step >= SCHED.length) return sod(now) + 45 * DAY; const e = SCHED[step]; return e.h ? now + e.h * HOUR : sod(now) + e.d * DAY; }
 function learnConcept(id){
   const now = Date.now(); const s = SS().c[id] || { seen: 0, ok: 0, ng: 0 };
-  if (!s.learned) { s.learned = now; s.step = 0; s.due = nextDue(0, now); logInc('newC'); }
+  if (!s.learned) { s.learned = now; s.step = 0; s.due = nextDue(0, now); logInc('newC'); if (cramOn()) cramSet(s, 0, now); }
   SS().c[id] = s;
 }
 function grade(id, g){
   const now = Date.now(); const s = crec(id); if (!s || !s.learned) return;
   s.seen = (s.seen || 0) + 1; s.last = now;
+  if (cramOn()) { /* 당일치기는 하루 몰아 복습 간격만 바꾸고, 평소 복습 일정은 그대로 둬요 */
+    const st = s.cr === (SS().cramAt || 0) ? (s.cs || 0) : 0;
+    if (g === 2) { s.ok = (s.ok || 0) + 1; cramSet(s, st + 1, now); s.lv0 = false; }
+    else if (g === 1) { cramSet(s, st, now); s.cd = now + 10 * MIN; }
+    else { s.ng = (s.ng || 0) + 1; cramSet(s, 0, now); s.lv0 = true; }
+    logInc('cards'); return;
+  }
   if (g === 2) { s.ok = (s.ok || 0) + 1; s.step = (s.step || 0) + 1; s.due = nextDue(s.step, now); s.lv0 = false; }
   else if (g === 1) { s.due = (s.step || 0) === 0 ? now + 3 * HOUR : sod(now) + DAY; }
   else { s.ng = (s.ng || 0) + 1; s.step = 0; s.due = now + 10 * MIN; s.lv0 = true; }
   logInc('cards');
 }
-function dueList(now){ now = now || Date.now(); return X.concepts.filter(c => { const s = crec(c.id); return s && s.learned && s.due <= now; }).sort((a, b) => crec(a.id).due - crec(b.id).due); }
-function pendingSame(now){ now = now || Date.now(); return X.concepts.filter(c => { const s = crec(c.id); return s && s.learned && (s.step || 0) === 0 && s.due > now; }).sort((a, b) => crec(a.id).due - crec(b.id).due); }
-function nextNew(n){ return X.concepts.filter(c => !isLearned(c.id)).slice(0, Math.max(0, n)); }
+function duePool(){ const sc = scopeSet(); return X.concepts.filter(c => inRange(c) || (sc && sc.has(c.id))); }
+function dueList(now){
+  now = now || Date.now();
+  if (cramOn()) return duePool().filter(c => { const s = crec(c.id); return s && s.learned && cramDue(s) <= now; }).sort((a, b) => cramDue(crec(a.id)) - cramDue(crec(b.id)));
+  return duePool().filter(c => { const s = crec(c.id); return s && s.learned && s.due <= now; }).sort((a, b) => crec(a.id).due - crec(b.id).due);
+}
+function pendingSame(now){
+  now = now || Date.now();
+  if (cramOn()) return duePool().filter(c => { const s = crec(c.id); if (!s || !s.learned) return false; const d = cramDue(s); return d > now && d < DONE; }).sort((a, b) => cramDue(crec(a.id)) - cramDue(crec(b.id)));
+  return duePool().filter(c => { const s = crec(c.id); return s && s.learned && (s.step || 0) === 0 && s.due > now; }).sort((a, b) => crec(a.id).due - crec(b.id).due);
+}
+/* 공부 범위: 목차에서 고른 개념 (없으면 전체) */
+function scopeIds(){ const sc = SS().scope; if (!sc || !sc.length) return null; const ids = sc.filter(id => X.cmap[id]); return ids.length ? ids : null; }
+function nextNew(n){
+  const set = scopeSet(); /* 목차에서 고른 범위가 있으면 그것이 먼저 */
+  let l = set ? X.concepts.filter(c => !isLearned(c.id) && set.has(c.id)) : CS().filter(c => !isLearned(c.id));
+  if (modeOf() !== 'all' || S.set.order === 'pr') l = l.slice().sort((a, b) => b.pr - a.pr); /* 같은 별 안에서는 목차 순 */
+  return l.slice(0, Math.max(0, n));
+}
+function conceptQAcc(){
+  const m = {};
+  allQ().concat(gcQs()).forEach(q => { const r = qrec(q); if (!r || !(r.r + r.w)) return; links(q).forEach(cid => { const a = m[cid] || (m[cid] = { att: 0, ok: 0 }); a.att++; if (r.lastOk) a.ok++; }); });
+  return m;
+}
+function scopeLabel(ids){
+  const set = new Set(ids); const parts = [];
+  X.units.forEach(u => { const n = u.concepts.filter(c => set.has(c.id)).length; if (!n) return; parts.push(u.n + '. ' + (u.short || u.title) + (n < u.concepts.length ? ' 일부(' + n + ')' : '')); });
+  return parts.join(', ');
+}
 
 /* ───────── 문제 ───────── */
 function customQs(){
@@ -168,7 +317,8 @@ function gq(g){
     my: g.my || '', img: g.img || null, sub: g.sub || '', tag: '실제 기출', lv: 2 };
 }
 function gcQs(){ return X ? G.qs.filter(g => g.a >= 0 && (g.lk || []).some(l => l[0] === X.id)).map(gq) : []; }
-function allQ(){ return X.qs.concat(customQs()); }
+function allQ(){ return X.qs.filter(qIn).concat(customQs()); }
+function allQx(){ return X.qs.filter(q => !SS().qh[q.id]).concat(customQs()); } /* 범위와 상관없이 (개념별 문제 등) */
 function Q(id){
   if (!id) return null;
   if (X && X.qmap[id]) return X.qmap[id];
@@ -229,27 +379,29 @@ function weekDelta(acc){
   return acc - s[ks[ks.length - 1]];
 }
 function subjStats(){
-  const Tn = X.concepts.length; let L = 0, K = 0, M = 0;
-  X.concepts.forEach(c => { const st = status(c.id); if (st !== 'new') L++; if (st === 'known' || st === 'master') K++; if (st === 'master') M++; });
+  const cs = CS(); const Tn = cs.length; let L = 0, K = 0, M = 0;
+  cs.forEach(c => { const st = status(c.id); if (st !== 'new') L++; if (st === 'known' || st === 'master') K++; if (st === 'master') M++; });
+  const every = X.concepts.filter(addVisible); const aL = every.filter(c => isLearned(c.id)).length;
   const qs = allQ(); const qa = qStats(qs); const gqs = gcQs(); const g = qStats(gqs);
   return { T: Tn, L, K, M, prog: pct(L, Tn), knownP: pct(K, Tn), masterP: pct(M, Tn), qN: qs.length, open: qs.filter(unlocked).length,
-    att: qa.att, acc: qa.acc, delta: weekDelta(qa.acc), gN: gqs.length, gAtt: g.att, gAcc: g.acc };
+    att: qa.att, acc: qa.acc, delta: weekDelta(qa.acc), gN: gqs.length, gAtt: g.att, gAcc: g.acc,
+    mode: modeOf(), allT: every.length, allL: aL, allProg: pct(aL, every.length), nAdd: X.concepts.filter(c => c.add).length };
 }
 function statsFor(sid){ const prev = X; X = SUB[sid]; try { return subjStats(); } finally { X = prev; } }
 function weakTop(n){
   const m = SS().cw;
-  return Object.keys(m).filter(k => X.cmap[k] && m[k][1] > 0).map(k => ({ id: k, acc: m[k][0] / (m[k][0] + m[k][1]) }))
+  return Object.keys(m).filter(k => inRange(X.cmap[k]) && m[k][1] > 0).map(k => ({ id: k, acc: m[k][0] / (m[k][0] + m[k][1]) }))
     .filter(w => w.acc < 0.85).sort((a, b) => a.acc - b.acc).slice(0, n);
 }
 function weakSet(){
   const set = new Set(); const m = SS().cw;
-  Object.keys(m).forEach(k => { const a = m[k]; if (a[1] > 0 && a[0] / (a[0] + a[1]) < 0.7) set.add(k); });
-  Object.keys(SS().ill).forEach(k => { if (X.cmap[k]) set.add(k); });
-  X.concepts.forEach(c => { const s = crec(c.id); if (s && s.lv0) set.add(c.id); });
+  Object.keys(m).forEach(k => { const a = m[k]; if (a[1] > 0 && a[0] / (a[0] + a[1]) < 0.7 && inRange(X.cmap[k])) set.add(k); });
+  Object.keys(SS().ill).forEach(k => { if (inRange(X.cmap[k])) set.add(k); });
+  CS().forEach(c => { const s = crec(c.id); if (s && s.lv0) set.add(c.id); });
   return set;
 }
 function unitStats(u){
-  const cs = u.concepts; const L = cs.filter(c => isLearned(c.id)).length;
+  const cs = UC(u); const L = cs.filter(c => isLearned(c.id)).length;
   const qs = allQ().filter(q => q.u === u.id); const a = qStats(qs);
   return { n: cs.length, L, prog: pct(L, cs.length), acc: a.acc, att: a.att, qN: qs.length };
 }
@@ -257,21 +409,21 @@ function unitStats(u){
 /* 새 내용 알림: 과목 파일이 바뀌면 새 개념·문제 수를 알려 주고, 바뀐 개념은 다시 복습에 넣어요 */
 function chash(c){ return hash(JSON.stringify([c.sum, (c.mn || []).map(m => [m.k, m.s])])); }
 function ensureKnown(){
-  const s = SS();
+  const s = SS(); const K = { concepts: X.concepts.filter(c => !c.mine), qs: X.qs.filter(q => !q.mine), cmap: X.cmap }; /* 내 개념은 빼고 비교 */
   if (!s.known) {
-    if (s.migrated) s.known = { c: X.concepts.filter(c => c.v !== 2).map(c => c.id), q: X.qs.filter(q => q.type === 'ox' ? X.cmap[q.c[0]].v !== 2 : !/-n\d/.test(q.id)).map(q => q.id), h: {} };
-    else s.known = { c: X.concepts.map(c => c.id), q: X.qs.map(q => q.id), h: {} };
-    X.concepts.forEach(c => { if (!s.known.h[c.id]) s.known.h[c.id] = chash(c); });
+    if (s.migrated) s.known = { c: K.concepts.filter(c => !c.v).map(c => c.id), q: K.qs.filter(q => q.type === 'ox' ? !K.cmap[q.c[0]].v : !/-[na]\d/.test(q.id)).map(q => q.id), h: {} };
+    else s.known = { c: K.concepts.map(c => c.id), q: K.qs.map(q => q.id), h: {} };
+    K.concepts.forEach(c => { if (!s.known.h[c.id]) s.known.h[c.id] = chash(c); });
   }
   const kc = new Set(s.known.c), kq = new Set(s.known.q);
-  const newC = X.concepts.filter(c => !kc.has(c.id)), newQ = X.qs.filter(q => !kq.has(q.id));
-  const changed = X.concepts.filter(c => kc.has(c.id) && s.known.h[c.id] != null && s.known.h[c.id] !== chash(c));
+  const newC = K.concepts.filter(c => !kc.has(c.id)), newQ = K.qs.filter(q => !kq.has(q.id));
+  const changed = K.concepts.filter(c => kc.has(c.id) && s.known.h[c.id] != null && s.known.h[c.id] !== chash(c));
   if (newC.length || newQ.length || changed.length) {
     const now = Date.now(); let re = 0;
     changed.forEach(c => { const r = s.c[c.id]; if (r && r.learned && !s.edits[c.id]) { r.due = Math.min(r.due, now); r.lv0 = true; re++; } });
     R.update = { c: newC.length, q: newQ.length, ch: changed.length, re };
-    s.known = { c: X.concepts.map(c => c.id), q: X.qs.map(q => q.id), h: {} };
-    X.concepts.forEach(c => { s.known.h[c.id] = chash(c); });
+    s.known = { c: K.concepts.map(c => c.id), q: K.qs.map(q => q.id), h: {} };
+    K.concepts.forEach(c => { s.known.h[c.id] = chash(c); });
     save();
   }
 }
@@ -366,7 +518,7 @@ function cur(){ return R.stack[R.stack.length - 1] || null; }
 let guard = false;
 function armGuard(){ if (guard) return; try { history.pushState({ g: 1 }, ''); guard = true; } catch (e) {} }
 function enterSubject(sid, tab){
-  X = SUB[sid]; R.sid = sid; S.cur = sid; SS().lastUse = Date.now();
+  X = SUB[sid]; R.sid = sid; S.cur = sid; SS().lastUse = Date.now(); applyLocal(X);
   R.tab = tab || 'study'; R.stack = []; R.t = {}; R.lv = {}; R.sheet = null; R.pdf = null; R.sheetCache = null; R.update = null;
   ensureKnown(); armGuard();
 }
@@ -422,8 +574,16 @@ function fullBar(inner, act, noHome){
 }
 function lrow(act, arg, title, meta, opt){
   opt = opt || {};
-  return '<button class="lrow' + (opt.hl ? ' hl' : '') + '" data-act="' + act + '" data-arg="' + esc(arg) + '"' + (opt.dis ? ' disabled' : '') + '><span><b>' + esc(title) + '</b>' + (meta ? '<span class="meta">' + esc(meta) + '</span>' : '') + '</span>' + (opt.right || '') + ICON.chev + '</button>';
+  return '<button class="lrow' + (opt.hl ? ' hl' : '') + '" data-act="' + act + '" data-arg="' + esc(arg) + '"' + (opt.dis ? ' disabled' : '') + '><span><b>' + esc(title) + (opt.tag || '') + '</b>' + (meta ? '<span class="meta">' + esc(meta) + '</span>' : '') + '</span>' + (opt.right || '') + ICON.chev + '</button>';
 }
+/* 중요도(★)와 추가 표시 */
+const PR_LABEL = { 3: '자주 출제', 2: '중요', 1: '기본' };
+const ADD_TAG = '<span class="addc">추가</span>';
+const MINE_TAG = '<span class="addc mine">내 개념</span>';
+function cTags(c){ return (c.add ? ADD_TAG : '') + (c.mine ? MINE_TAG : '') + (SS().edits[c.id] && !c.mine ? '<span class="addc ed">고침</span>' : ''); }
+function starsHTML(n){ n = n || 2; return '★'.repeat(n) + (n < 3 ? '<i>' + '★'.repeat(3 - n) + '</i>' : ''); }
+function prMark(c){ return '<span class="prs p' + c.pr + '" title="' + PR_LABEL[c.pr] + '" aria-label="중요도 별 ' + c.pr + '개, ' + PR_LABEL[c.pr] + '">' + starsHTML(c.pr) + '</span>'; }
+function prChip(c){ return '<span class="chip c-pr p' + c.pr + '">' + starsHTML(c.pr) + ' ' + PR_LABEL[c.pr] + '</span>'; }
 function sumHTML(c){ return '<ul class="sum">' + (c.sum || []).map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>'; }
 function mnHTML(m, opt){
   opt = opt || {};
@@ -463,7 +623,7 @@ function conceptHTML(c, lv, o){
     body = '<div class="ex">' + paras(c.ex) + '</div>' +
       (c.why ? '<details class="why"><summary>왜 그럴까?</summary><p>' + esc(c.why) + '</p></details>' : '') +
       mnBlock(c, { learn: o.learn }) + (c.note ? '<p class="c-note">' + esc(c.note) + '</p>' : '');
-  } else if (lv === 1) body = sumHTML(c);
+  } else if (lv === 1) body = sumHTML(c) + (c.note && c.edited ? '<p class="c-note">' + esc(c.note) + '</p>' : '');
   else if (lv === 2) body = memoHTML(mnList(c), true);
   else body = R.t.peek === c.id ? sumHTML(c) + memoHTML(mnList(c))
     : '<button class="recall" data-act="peek" data-arg="' + c.id + '"><span>' + esc(c.t) + '</span><em>핵심을 먼저 떠올려 보세요. 떠올린 다음 탭해서 확인</em></button>';
@@ -472,7 +632,7 @@ function conceptHTML(c, lv, o){
   return '<article class="concept paper">' +
     '<header class="c-head"><div class="c-eyebrow mono">' + u.n + '-' + c.n + ' · ' + esc(u.title) + '</div>' +
     '<h2 class="c-title">' + esc(c.t) + '</h2>' +
-    '<div class="c-chips"><span class="chip st-' + st + '">' + ST_LABEL[st] + '</span>' + (c.imp ? '<span class="chip c-imp">중요</span>' : '') + (c.v === 2 ? '<span class="chip c-new">새로 추가</span>' : '') + (c.edited ? '<span class="chip c-edit">내가 수정함</span>' : '') + (s.flags[c.id] ? '<span class="chip c-flag">확인 필요</span>' : '') + '</div>' +
+    '<div class="c-chips"><span class="chip st-' + st + '">' + ST_LABEL[st] + '</span>' + prChip(c) + (isAdd(c) ? '<span class="chip c-add">추가</span>' : '') + (c.mine ? '<span class="chip c-mine">내가 추가</span>' : '') + (c.edited || (SS().edits[c.id] && !c.mine) ? '<span class="chip c-edit">내가 수정함</span>' : '') + (!inRange(c) ? '<span class="chip c-out">' + MODES[modeOf()].name + ' 범위 밖</span>' : '') + (s.flags[c.id] ? '<span class="chip c-flag">확인 필요</span>' : '') + '</div>' +
     '<div class="c-tools"><button class="tool" data-act="speak" data-arg="' + c.id + ':' + lv + '" aria-label="읽어주기" title="읽어주기">' + ICON.speak + '</button>' +
     '<button class="tool" data-act="go" data-arg="edit:' + c.id + '" aria-label="내용 수정" title="수정">' + ICON.edit + '</button>' +
     '<button class="tool' + (s.flags[c.id] ? ' on' : '') + '" data-act="flag" data-arg="' + c.id + '" aria-label="확인 필요 표시" title="확인 필요">' + ICON.flag + '</button></div></header>' +
@@ -488,6 +648,8 @@ function qHead(q){
   else if (!q.gc && q.src !== 'custom') ch.push('<span class="chip c-lv' + (q.lv === 2 ? ' lv2' : '') + '">' + (q.lv === 2 ? '국시 수준' : '기본') + '</span>');
   if (q.tag && !q.gc) ch.push('<span class="chip c-case">' + esc(q.tag) + '</span>');
   else if (q.case && !q.tag) ch.push('<span class="chip c-case">사례형</span>');
+  if (isAdd(q) && !q.gc) ch.push('<span class="chip c-add">추가</span>');
+  if (q.edited) ch.push('<span class="chip c-edit">내가 고친 문제</span>');
   return ch.length ? '<div class="qchips">' + ch.join('') + '</div>' : '';
 }
 const emphQ = t => esc(t).replace(/(옳지 않은 것|적절하지 않은 것|해당하지 않는 것|해당되지 않는 것|아닌 것|틀린 것|가장 먼저|가장 우선)/g, '<u>$1</u>');
@@ -541,6 +703,7 @@ function explainHTML(q, perm){
       '<p class="hint">‘해설 질문 복사’를 누르고 Claude에 붙여넣으면 자세한 해설을 받을 수 있어요.</p>';
   }
   if (lk.length) h += '<div class="rel-c"><span>관련 개념</span>' + lk.map(l => { const c = cOf(l[0], l[1]); return c ? '<button class="chip-btn" data-act="csheet" data-arg="' + esc(l[0] + '|' + l[1]) + '">' + esc(c.t) + '</button>' : ''; }).join('') + '</div>';
+  if (!q.gc && q.src !== 'custom' && !q.mine && X && X.qmap[q.id]) h += '<div class="qfix"><button class="btn ghost sm" data-act="go" data-arg="qedit:' + q.id + '">' + ICON.edit + (q.edited ? '내가 고친 문제 · 다시 고치기' : '문제가 이상해요? 고치기 · 빼기') + '</button></div>';
   return h + '</section>';
 }
 
@@ -568,45 +731,98 @@ function renderSheet(){
 
 /* ───────── 첫 화면: 과목 ───────── */
 function backupMeta(){ return S.lastBackup ? '마지막 백업 ' + new Date(S.lastBackup).toLocaleDateString('ko-KR') : '아직 백업하지 않았어요'; }
+function termLabel(k){ const m = /^(\d)\s*-\s*(\d)$/.exec(k || ''); return m ? m[1] + '학년 ' + m[2] + '학기' : (k || '과목'); }
+/* 첫 화면 요약: 불러온 과목은 새로 계산, 아직 안 불러온 과목은 지난번 값 */
+function subjSum(sid){
+  if (SUB[sid]) { const st = statsFor(sid); S.sums[sid] = { T: st.T, L: st.L, prog: st.prog, knownP: st.knownP, acc: st.acc, allT: st.allT, allProg: st.allProg, nAdd: st.nAdd, units: SUB[sid].units.length }; }
+  return S.sums[sid] || null;
+}
+function modeSeg(sid, m){
+  return '<div class="seg sm mode-seg" role="group" aria-label="공부 모드">' + ['cram', 'core', 'all'].map(k => '<button data-act="smode" data-arg="' + sid + ':' + k + '" aria-pressed="' + (m === k) + '"><b>' + MODES[k].name + '</b><small>' + (k === 'all' ? '모두' : MODES[k].range) + '</small></button>').join('') + '</div>';
+}
+function addSeg(sid){
+  const off = addOff(sid);
+  return '<div class="seg sm" role="group" aria-label="추가 내용"><button data-act="sadd" data-arg="' + sid + ':1" aria-pressed="' + !off + '">같이 공부</button><button data-act="sadd" data-arg="' + sid + ':0" aria-pressed="' + off + '">빼고 공부</button></div>';
+}
+function subjCard(it){
+  const sid = it.id, sm = subjSum(sid), s = S.subj[sid], ses = s && s.ses, m = modeOf(sid);
+  const title = (SUB[sid] && SUB[sid].title) || it.title || sid;
+  const meta = [it.kind || ''].concat(sm ? [sm.units + '단원', '개념 ' + sm.allT + '개'] : ['처음 들어갈 때 내용을 내려받아요']).filter(Boolean).join(' · ');
+  const rl = m === 'all' ? '진도' : MODES[m].range + ' 진도';
+  return '<article class="subj-card"><button class="subj-main" data-act="enter" data-arg="' + sid + '">' +
+    '<span class="subj-t">' + esc(title) + (m !== 'all' ? '<span class="chip c-mode m-' + m + '">' + MODES[m].name + '</span>' : '') + '</span><span class="subj-m">' + esc(meta) + '</span>' +
+    (sm ? '<span class="subj-stats"><span><b class="mono">' + sm.prog + '<small>%</small></b><i>' + rl + '</i></span>' + (m !== 'all' ? '<span><b class="mono">' + sm.allProg + '<small>%</small></b><i>전체 진도</i></span>' : '') + '<span><b class="mono">' + (sm.acc == null ? '–' : sm.acc + '<small>%</small>') + '</b><i>정답률</i></span></span>' +
+      '<span class="meter" aria-hidden="true"><i style="width:' + sm.prog + '%"></i><i class="m2" style="width:' + sm.knownP + '%"></i></span>' : '') + '</button>' +
+    '<div class="subj-opts"><div class="so-row"><span class="lab">공부 모드</span>' + modeSeg(sid, m) + '</div>' +
+    (sm && sm.nAdd ? '<div class="so-row"><span class="lab">추가 내용 ' + sm.nAdd + '개</span>' + addSeg(sid) + '</div>' : '') + '</div>' +
+    '<button class="btn primary subj-go" data-act="enterGo" data-arg="' + sid + '">' + (ses ? '이어서 공부' : sm && sm.L ? '이어서 공부' : '공부 시작') + '</button></article>';
+}
 function vSubjects(){
-  const ids = ORDER.slice().sort((a, b) => ((S.subj[b] || {}).lastUse || 0) - ((S.subj[a] || {}).lastUse || 0));
+  const list = (window.NSA_LIST || []).filter(it => it && it.id); const hide = S.set.hideSubj || {}; const picking = !!R.t.subjPick;
   let h = '<header class="top home-top"><div class="brand"><b>청진노트</b><span>간호학 시험공부</span></div></header><section class="stack">' +
-    '<div><h1>어떤 과목을 공부할까요?</h1><p class="sub">틈날 때마다 열어서 이어서 하면 돼요. 하던 곳은 자동으로 저장돼요.</p></div>';
-  if (!ids.length) h += '<p class="empty">과목 파일을 불러오지 못했어요. index.html 옆에 subjects 폴더가 있는지 확인해 주세요.</p>';
-  h += ids.map(sid => {
-    const x = SUB[sid], st = statsFor(sid), s = S.subj[sid];
-    const ses = s && s.ses;
-    return '<article class="subj-card"><button class="subj-main" data-act="enter" data-arg="' + sid + '">' +
-      '<span class="subj-t">' + esc(x.title) + '</span><span class="subj-m">' + x.units.length + '단원 · 개념 ' + st.T + '개 · 문제 ' + st.qN + '개</span>' +
-      '<span class="subj-stats"><span><b class="mono">' + st.prog + '<small>%</small></b><i>진도</i></span><span><b class="mono">' + (st.acc == null ? '–' : st.acc + '<small>%</small>') + '</b><i>정답률</i></span></span>' +
-      '<span class="meter" aria-hidden="true"><i style="width:' + st.prog + '%"></i><i class="m2" style="width:' + st.knownP + '%"></i></span></button>' +
-      '<button class="btn primary subj-go" data-act="enterGo" data-arg="' + sid + '">' + (ses ? '이어서 공부' : st.L ? '이어서 공부' : '공부 시작') + '</button></article>';
-  }).join('');
+    '<div><h1>어떤 과목을 공부할까요?</h1><p class="sub">과목마다 공부 모드를 고를 수 있어요. 시험이 코앞이면 <b>당일치기</b>(★★★만), 1~2주 남았으면 <b>핵심</b>(★★ 이상), 여유가 있으면 <b>전체</b>. 하던 곳은 자동으로 저장돼요.</p></div>';
+  if (!list.length) h += '<p class="empty">과목 목록이 비어 있어요. subjects/list.js를 확인해 주세요.</p>';
+  if (picking) {
+    h += '<div class="notice"><b>내가 듣는 과목 고르기</b><p>체크를 끈 과목은 첫 화면에서 숨겨요. 기록은 그대로 남아요.</p></div><div class="list">' +
+      list.map(it => '<button class="lrow pick-row" data-act="subjhide" data-arg="' + it.id + '"><span class="tck' + (hide[it.id] ? '' : ' on') + '" aria-hidden="true">' + (hide[it.id] ? '' : '✓') + '</span><span><b>' + esc(it.title || it.id) + '</b><span class="meta">' + esc([termLabel(it.term), it.kind].filter(Boolean).join(' · ')) + '</span></span></button>').join('') +
+      '</div><button class="btn primary big" data-act="subjpick">다 골랐어요</button>';
+  } else {
+    const vis = list.filter(it => !hide[it.id]);
+    if (list.length && !vis.length) h += '<p class="empty">보이는 과목이 없어요. 아래 ‘과목 고르기’에서 켜 주세요.</p>';
+    const groups = [], gm = {};
+    vis.forEach(it => { const k = it.term || ''; if (!gm[k]) { gm[k] = { k, items: [] }; groups.push(gm[k]); } gm[k].items.push(it); });
+    groups.forEach(g => {
+      g.items.sort((a, b) => ((S.subj[b.id] || {}).lastUse || 0) - ((S.subj[a.id] || {}).lastUse || 0));
+      h += (groups.length > 1 || g.k ? '<h3 class="h3 term-h">' + esc(termLabel(g.k)) + ' <span>' + g.items.length + '과목</span></h3>' : '') + g.items.map(subjCard).join('');
+    });
+  }
   if (LOADERR.length) h += '<div class="notice"><b>일부 과목 파일을 불러오지 못했어요</b><p>' + LOADERR.map(esc).join(', ') + '</p><p>다른 과목은 그대로 쓸 수 있어요.</p></div>';
-  h += '<div class="list">' + lrow('go', 'settings:', '설정', '글자 크기 · 화면 · 그림 안내') + lrow('go', 'backup:', '기록 백업 · 불러오기', backupMeta(), { hl: !S.lastBackup || Date.now() - S.lastBackup > 7 * DAY }) + '</div>' +
-    '<p class="note">과목은 나중에 계속 추가할 수 있어요. 학습 기록은 이 기기에만 저장되니 일주일에 한 번 백업하세요.</p></section>';
+  h += '<div class="list">' + (picking ? '' : lrow('subjpick', '', '과목 고르기', '내가 듣는 과목만 첫 화면에 보이기' + (Object.keys(hide).filter(k => hide[k]).length ? ' · 숨긴 과목 ' + Object.keys(hide).filter(k => hide[k]).length + '개' : ''))) +
+    lrow('go', 'settings:', '설정', '글자 크기 · 화면 · 그림 안내') + lrow('go', 'backup:', '기록 백업 · 불러오기', backupMeta(), { hl: !S.lastBackup || Date.now() - S.lastBackup > 7 * DAY }) + '</div>' +
+    '<p class="note">과목은 계속 추가할 수 있어요. 학습 기록은 이 기기에만 저장되니 일주일에 한 번 백업하세요.</p></section>';
   return h;
 }
 
 /* ───────── 공부 탭 ───────── */
+function newCount(due){ return cramOn() ? (due > 8 ? 2 : 4) : (due > 6 ? 1 : due > 2 ? 2 : 3); }
 function chunkPreview(){
-  const now = Date.now(); const due = dueList(now).length; const rev = Math.min(due, 6);
-  const left = X.concepts.filter(c => !isLearned(c.id)).length;
-  const nNew = Math.min(left, due > 6 ? 1 : due > 2 ? 2 : 3);
+  const now = Date.now(); const due = dueList(now).length; const rev = Math.min(due, cramOn() ? 5 : 6);
+  const left = nextNew(9999).length;
+  const nNew = Math.min(left, newCount(due));
   const pool = Math.min(2, reviewPool().filter(q => (qrec(q).last || 0) < sod(now)).length);
-  return { rev, nNew, q: pool + (nNew ? nNew + 2 : (rev ? 2 : 0)), pool };
+  const q = pool + (nNew ? nNew + 2 : (rev ? 2 : 0));
+  return { rev, nNew, q, pool, min: Math.max(3, Math.round(rev * 0.5 + nNew * 1.5 + q * 0.4)) };
+}
+function whenTxt(t){ const now = Date.now(); return (sod(t) > sod(now) ? (sod(t) - sod(now) === DAY ? '내일 ' : new Date(t).getDate() + '일 ') : '') + hhmm(t); }
+function cramBox(st){
+  const now = Date.now(); const cs = CS(); const newLeft = cs.filter(c => !isLearned(c.id)).length; const due = dueList(now).length; const pend = pendingSame(now);
+  const done = cs.filter(c => { const r = crec(c.id); return r && r.learned && cramDue(r) >= DONE; }).length;
+  const mins = Math.max(5, Math.ceil((newLeft * 2 + due * 0.5 + pend.length * 0.5) / 5) * 5);
+  const tx = newLeft || due ? '끝까지 약 ' + mins + '분 (새 개념 1개에 2분쯤)' : pend.length ? '다음 몰아 복습 ' + pend.length + '개는 ' + whenTxt(cramDue(crec(pend[0].id))) + '부터' : '★★★ 몰아 복습을 모두 끝냈어요. 시험 잘 봐요!';
+  return '<div class="cram-box"><div class="cb-h"><b>당일치기</b><span>★★★ ' + cs.length + '개 · 배운 직후 → 10분 → 1시간 → 3시간 → 다음 날 아침</span></div>' +
+    '<div class="cb-n"><span><b class="mono">' + newLeft + '</b>안 본 개념</span><span><b class="mono">' + due + '</b>지금 복습</span><span><b class="mono">' + pend.length + '</b>이따 복습</span><span><b class="mono">' + done + '</b>다 외움</span></div>' +
+    '<p class="cb-t">' + esc(tx) + '</p>' +
+    '<div class="row-btns"><button class="btn sm" data-act="rangenote">★★★ 요약지 보기</button><button class="btn sm" data-act="quiz" data-arg="range:">★★★ 문제 테스트</button></div></div>';
+}
+function modeBox(st){
+  const m = modeOf(), sid = X.id;
+  let h = '<div class="mode-box"><div class="so-row"><span class="lab">공부 모드</span>' + modeSeg(sid, m) + '</div>' +
+    '<p class="mb-d">' + esc(MODES[m].desc) + (m !== 'all' ? ' · 개념 ' + st.T + '개 (전체 ' + st.allT + '개 중)' : '') + '</p>';
+  if (st.nAdd) h += '<div class="so-row"><span class="lab">추가 내용 ' + st.nAdd + '개</span>' + addSeg(sid) + '</div>';
+  if (m === 'all') { const od = S.set.order === 'pr' ? 'pr' : 'toc'; h += '<div class="so-row"><span class="lab">새 개념 순서</span><div class="seg sm" role="group" aria-label="새 개념 순서"><button data-act="order" data-arg="toc" aria-pressed="' + (od === 'toc') + '">목차 순</button><button data-act="order" data-arg="pr" aria-pressed="' + (od === 'pr') + '">중요한 것 먼저</button></div></div>'; }
+  return h + '</div>';
 }
 function updateNotice(){
   const u = R.update; if (!u) return '';
   const parts = []; if (u.c) parts.push('개념 ' + u.c + '개'); if (u.q) parts.push('문제 ' + u.q + '개');
-  return '<div class="notice good"><b>새 내용이 추가됐어요</b><p>' + (parts.length ? parts.join(', ') + '가 새로 들어왔어요. 새 개념은 공부 순서에 맞춰 차례로 나와요. ' : '') +
+  return '<div class="notice good"><b>새 내용이 추가됐어요</b><p>' + (parts.length ? parts.join(', ') + '가 새로 들어왔어요. 새 개념은 공부 순서에 맞춰 차례로 나오고, <b>추가</b> 표시가 붙어 있어요. 목차에서 ‘추가된 내용’만 골라 공부할 수도 있어요. ' : '') +
     (u.re ? '내용이 바뀐 개념 ' + u.re + '개는 다시 복습에 넣었어요. ' : '') + '지금까지의 기록은 그대로예요.</p><div class="row-btns"><button class="btn" data-act="updok">확인</button></div></div>';
 }
 function heroHTML(st){
   const d = st.delta;
   const dTxt = d == null ? (st.att ? '푼 문제 ' + st.att + '개 기준' : '문제를 풀면 나와요') : (d === 0 ? '지난주와 같아요' : '지난주보다 <b class="' + (d > 0 ? 'up' : 'dn') + '">' + (d > 0 ? '+' : '') + d + '%p</b>');
   return '<div class="hero"><div class="hero-row">' +
-    '<div class="hero-big"><span class="lab">전체 진도</span><b class="mono">' + st.prog + '<small>%</small></b><span class="meta">배운 개념 ' + st.L + ' / ' + st.T + '</span></div>' +
+    '<div class="hero-big"><span class="lab">' + (st.mode && st.mode !== 'all' ? MODES[st.mode].range + ' 진도' : '전체 진도') + '</span><b class="mono">' + st.prog + '<small>%</small></b><span class="meta">배운 개념 ' + st.L + ' / ' + st.T + (st.mode && st.mode !== 'all' ? ' · 전체 ' + st.allProg + '%' : '') + '</span></div>' +
     '<div class="hero-big"><span class="lab">문제 정답률</span><b class="mono">' + (st.acc == null ? '–' : st.acc + '<small>%</small>') + '</b><span class="meta">' + dTxt + '</span></div></div>' +
     '<span class="meter" aria-label="진도 ' + st.prog + '%, 외움 ' + st.knownP + '%"><i style="width:' + st.prog + '%"></i><i class="m2" style="width:' + st.knownP + '%"></i></span>' +
     '<div class="hero-sub"><span><i class="lg l1"></i>배움 ' + st.prog + '%</span><span><i class="lg l2"></i>외움 ' + st.knownP + '%</span><span>푼 문제 ' + st.att + ' / ' + st.qN + '</span>' + (st.gN ? '<span>기출 정답률 ' + (st.gAcc == null ? '–' : st.gAcc + '%') + '</span>' : '') + '</div></div>';
@@ -614,6 +830,8 @@ function heroHTML(st){
 function vStudy(){
   const st = subjStats(), now = Date.now(), s = SS(), ses = s.ses;
   let h = subjTop() + '<section class="stack">' + updateNotice() + heroHTML(st);
+  const sc = scopeIds();
+  if (sc) { const L = sc.filter(isLearned).length; h += '<div class="scope-box"><div class="sb-t"><span class="lab">공부 범위</span><b>' + esc(scopeLabel(sc)) + '</b><span class="meta">개념 ' + sc.length + '개 · 배움 ' + pct(L, sc.length) + '%</span></div><div class="sb-b"><button class="btn sm" data-act="go" data-arg="toc:">바꾸기</button><button class="btn sm ghost" data-act="scopeclear">전체로</button></div></div>'; }
   if (ses && ses.steps[ses.i] && ses.steps[ses.i].t !== 'done') {
     const n = ses.steps.length - 1;
     h += '<button class="start" data-act="cont"><span class="start-k">이어서 공부하기</span><span class="start-m mono">하던 곳부터 · ' + (ses.i + 1) + ' / ' + n + '</span>' + ECG + '</button>';
@@ -621,17 +839,19 @@ function vStudy(){
     const p = chunkPreview();
     if (p.rev || p.nNew || p.pool) {
       const parts = []; if (p.rev) parts.push('복습 ' + p.rev); if (p.nNew) parts.push('새 개념 ' + p.nNew); if (p.q) parts.push('문제 ' + p.q);
-      h += '<button class="start" data-act="cont"><span class="start-k">' + (st.L ? '이어서 공부하기' : '공부 시작하기') + '</span><span class="start-m mono">' + parts.join(' · ') + ' · 약 5분</span>' + ECG + '</button>';
+      h += '<button class="start" data-act="cont"><span class="start-k">' + (st.L ? '이어서 공부하기' : '공부 시작하기') + '</span><span class="start-m mono">' + parts.join(' · ') + ' · 약 ' + p.min + '분</span>' + ECG + '</button>';
     } else {
       const pend = pendingSame(now);
-      const msg = pend.length ? '같은 날 2회차 복습 ' + pend.length + '개가 ' + hhmm(crec(pend[0].id).due) + '부터 열려요. 시간을 두고 다시 보는 게 기억에 좋아요.'
-        : '모든 개념을 배웠어요. 복습 날짜가 되면 여기에 나타나요.';
+      const msg = pend.length ? (cramOn() ? '몰아 복습 ' + pend.length + '개가 ' + whenTxt(dueAt(pend[0].id)) + '부터 열려요. 그 사이에 ★★★ 문제 테스트를 풀어 보세요.' : '같은 날 2회차 복습 ' + pend.length + '개가 ' + hhmm(dueAt(pend[0].id)) + '부터 열려요. 시간을 두고 다시 보는 게 기억에 좋아요.')
+        : sc ? '고른 범위의 새 개념을 모두 배웠어요. 목차에서 범위를 바꾸거나, 문제로 다져 보세요.' : modeOf() !== 'all' ? MODES[modeOf()].range + ' 개념을 모두 배웠어요. 시간이 되면 공부 모드를 넓혀 보세요.' : '모든 개념을 배웠어요. 복습 날짜가 되면 여기에 나타나요.';
       h += '<div class="start idle"><span class="start-k">지금 할 공부 끝</span><span class="start-m">' + esc(msg) + '</span></div>' +
         '<button class="btn" data-act="start" data-arg="extra">그래도 더 하기 · 연습 카드와 문제</button>';
     }
   }
   h += '<button class="btn quick" data-act="start" data-arg="quick"' + (st.L ? '' : ' disabled') + '>3분만 · 복습 카드 5장</button>';
+  h += (cramOn() ? cramBox(st) : '') + modeBox(st);
   const rows = [];
+  rows.push(lrow('go', 'toc:', '목차에서 골라 공부하기', '단원·개념별 진도와 정답률 · 원하는 것만, 부족한 것만 다시'));
   const pool = reviewPool().length; if (pool) rows.push(lrow('quiz', 'pool:', '다시 풀 문제 ' + pool + '개', '틀렸거나 애매했던 문제 · 2번 연속 맞히면 졸업'));
   const wk = weakTop(1); if (wk.length) rows.push(lrow('start', 'weak', '약점 공부', '가장 많이 틀린 개념: ' + X.cmap[wk[0].id].t));
   const todo = figTodoList().length; if (todo) rows.push(lrow('go', 'figtodo:', '그림 넣을 개념 ' + todo + '개', '나중에 넣기로 한 그림'));
@@ -683,12 +903,12 @@ function buildChunk(kind, arg){
   const qStep = (q, tag) => steps.push({ t: 'q', qid: q.id, tag: q.gc ? '실제 기출' : tag });
   if (kind === 'main') {
     const due = dueList(now);
-    const rev = due.slice(0, 6);
+    const rev = due.slice(0, cramOn() ? 5 : 6);
     rev.forEach(c => steps.push(cardStep(c.id)));
     const fq = figQuestion(rev.map(c => c.id)); if (fq) steps.push(fq);
     const pool = reviewPool().filter(q => (qrec(q).last || 0) < sod(now)).slice(0, 2);
     pool.forEach(q => qStep(q, '다시 풀기'));
-    const news = nextNew(due.length > 6 ? 1 : due.length > 2 ? 2 : 3);
+    const news = nextNew(newCount(due.length));
     let asks = 0;
     news.forEach(c => {
       steps.push({ t: 'learn', cid: c.id });
@@ -704,12 +924,12 @@ function buildChunk(kind, arg){
     let rev = dueList(now).slice(0, 5).map(c => ({ t: 'card', cid: c.id }));
     if (rev.length < 5) {
       const have = new Set(rev.map(x => x.cid));
-      shuffle(X.concepts.filter(c => isLearned(c.id) && !have.has(c.id))).slice(0, 5 - rev.length).forEach(c => rev.push({ t: 'card', cid: c.id, practice: true }));
+      shuffle(CS().filter(c => isLearned(c.id) && !have.has(c.id))).slice(0, 5 - rev.length).forEach(c => rev.push({ t: 'card', cid: c.id, practice: true }));
     }
     rev.forEach(x => steps.push(x));
     mixedQs(1, new Set(), []).forEach(q => qStep(q, '섞어 풀기'));
   } else if (kind === 'extra') {
-    shuffle(X.concepts.filter(c => isLearned(c.id))).slice(0, 5).forEach(c => steps.push({ t: 'card', cid: c.id, practice: true }));
+    shuffle(CS().filter(c => isLearned(c.id))).slice(0, 5).forEach(c => steps.push({ t: 'card', cid: c.id, practice: true }));
     const fq = figQuestion([]); if (fq) steps.push(fq);
     mixedQs(3, new Set(), []).forEach(q => qStep(q, '섞어 풀기'));
   } else if (kind === 'weak') {
@@ -718,10 +938,28 @@ function buildChunk(kind, arg){
       allQ().concat(gcQs()).filter(q => links(q).includes(w.id) && unlocked(q)).sort((a, b) => (inPool(qrec(b)) ? 1 : 0) - (inPool(qrec(a)) ? 1 : 0)).slice(0, 2).forEach(q => qStep(q, '약점 문제'));
       steps.push({ t: 'card', cid: w.id, fresh: true });
     });
+  } else if (kind === 'pick') {
+    const ids = String(arg || '').split(',').filter(id => X.cmap[id]);
+    const weak = weakSet(); const acc = conceptQAcc();
+    const low = id => weak.has(id) || (acc[id] && acc[id].ok / acc[id].att < 0.6);
+    const now6 = ids.slice(0, 6); const rest = ids.slice(6);
+    const fresh = now6.filter(id => !isLearned(id));
+    now6.forEach(id => {
+      if (!isLearned(id)) { steps.push({ t: 'learn', cid: id }); const ox = oxOf(id); if (ox) steps.push({ t: 'q', qid: ox.id, tag: '바로 확인' }); }
+      else if (low(id)) steps.push({ t: 'learn', cid: id, relearn: true });
+      else steps.push({ t: 'card', cid: id, practice: true });
+    });
+    shuffle(fresh).forEach(id => steps.push({ t: 'card', cid: id, fresh: true }));
+    const set = new Set(now6), fset = new Set(fresh);
+    const qs = shuffle(allQ().concat(gcQs()).filter(q => q.type === 'mc' && links(q).some(c => set.has(c)) && links(q).every(c => isLearned(c) || fset.has(c))))
+      .sort((a, b) => (inPool(qrec(b)) ? 1 : 0) - (inPool(qrec(a)) ? 1 : 0)).slice(0, Math.min(6, Math.max(2, now6.length)));
+    qs.forEach(q => qStep(q, '고른 개념 문제'));
+    if (steps.length) { steps.push({ t: 'done' }); steps.rest = rest; return steps; }
+    return null;
   } else if (kind === 'review') {
     dueList(now).slice(0, 30).forEach(c => steps.push(cardStep(c.id)));
   } else if (kind === 'practice') {
-    const u = X.umap[arg]; let cs = u.concepts.filter(c => isLearned(c.id)); if (!cs.length) cs = u.concepts;
+    const u = X.umap[arg]; const uc = UC(u).length ? UC(u) : u.concepts; let cs = uc.filter(c => isLearned(c.id)); if (!cs.length) cs = uc;
     shuffle(cs).slice(0, 12).forEach(c => steps.push({ t: 'card', cid: c.id, practice: true }));
   }
   if (!steps.length) return null;
@@ -742,7 +980,7 @@ function startSession(kind, arg){
   const old = SS().ses; if (old) settleCurrentStep();
   const steps = buildChunk(kind, arg);
   if (!steps) { toast(kind === 'review' ? '지금 복습할 카드가 없어요' : kind === 'weak' ? '아직 약점 기록이 없어요' : '지금 할 항목이 없어요'); return; }
-  SS().ses = { kind, arg: arg || '', steps, i: 0, start: Date.now(), st: { rev: 0, newc: 0, qok: 0, qn: 0, again: 0 }, rq: {}, rev: false, q: null, fq: null };
+  SS().ses = { kind, arg: arg || '', steps, rest: steps.rest || [], i: 0, start: Date.now(), st: { rev: 0, newc: 0, qok: 0, qn: 0, again: 0 }, rq: {}, rev: false, q: null, fq: null };
   prepStep(); logInc('ses'); R.doneSes = null;
   R.stack = R.stack.filter(x => x.name !== 'session');
   go('session');
@@ -838,25 +1076,46 @@ function vFigQ(st, s){
 function vDoneWrap(s){ return '<div>' + fullBar('<div class="pbar"><i style="width:100%"></i></div>', 'sesHome') + vDone(s) + '</div>'; }
 function vDone(s){
   const now = Date.now(), pend = pendingSame(now), due = dueList(now).length;
-  const left = X.concepts.filter(c => !isLearned(c.id)).length;
+  const left = nextNew(9999).length;
   const st = s.st;
   let next;
-  if (pend.length) next = '같은 날 2회차 복습 ' + pend.length + '개가 ' + hhmm(crec(pend[0].id).due) + '부터 열려요. 한 번 더 보면 훨씬 오래 남아요.';
+  if (pend.length) next = cramOn() ? '몰아 복습 ' + pend.length + '개가 ' + whenTxt(dueAt(pend[0].id)) + '부터 열려요. 그때 다시 보면 시험까지 남아요.' : '같은 날 2회차 복습 ' + pend.length + '개가 ' + hhmm(dueAt(pend[0].id)) + '부터 열려요. 한 번 더 보면 훨씬 오래 남아요.';
   else if (due) next = '지금 복습할 카드가 ' + due + '개 더 있어요.';
-  else if (left) next = '새 개념이 ' + left + '개 남았어요. 틈날 때 이어서 해요.';
-  else next = '모든 개념을 배웠어요. 복습 날짜가 되면 다시 알려 줘요.';
-  const label = { main: '이어서 공부', quick: '3분 복습', weak: '약점 공부', practice: '카드 연습', review: '복습 카드', extra: '더 하기' }[s.kind] || '공부';
+  else if (left) next = (modeOf() !== 'all' ? MODES[modeOf()].range + ' 중 ' : '') + '새 개념이 ' + left + '개 남았어요. 틈날 때 이어서 해요.';
+  else next = modeOf() !== 'all' ? MODES[modeOf()].range + ' 개념을 모두 배웠어요.' : '모든 개념을 배웠어요. 복습 날짜가 되면 다시 알려 줘요.';
+  const label = { main: '이어서 공부', quick: '3분 복습', weak: '약점 공부', practice: '카드 연습', review: '복습 카드', extra: '더 하기', pick: '고른 개념 공부' }[s.kind] || '공부';
+  const rest = (s.rest || []).filter(id => X.cmap[id]);
+  if (s.kind === 'pick') next = rest.length ? '고른 개념 중 ' + rest.length + '개가 남았어요. 이어서 하면 다음 개념들로 한 세트가 만들어져요.' : '고른 개념을 한 번씩 다 봤어요. 목차에서 정답률을 확인하고, 부족한 것만 골라 다시 해 보세요.';
   return '<div class="done-card"><div class="eyebrow">' + label + '</div><h2>한 세트 끝!</h2>' +
     '<div class="stats2"><div class="stat"><b>' + st.rev + '</b><span>복습한 카드</span></div><div class="stat"><b>' + st.newc + '</b><span>새로 배운 개념</span></div><div class="stat"><b>' + (st.qn ? st.qok + '/' + st.qn : '–') + '</b><span>문제 정답</span></div><div class="stat"><b>' + (s.mins || 1) + '분</b><span>걸린 시간</span></div></div>' +
     '<p>' + esc(next) + '</p>' + ((s.mins || 0) >= 25 ? '<p class="hint">25분 넘게 했어요. 5분 쉬면 다음 공부가 더 잘 들어와요.</p>' : '') +
-    '<div class="row-btns"><button class="btn primary" data-act="cont">다음 5분 이어서</button><button class="btn" data-act="sesHome">공부 탭으로</button></div></div>';
+    '<div class="row-btns">' + (s.kind === 'pick' && rest.length ? '<button class="btn primary" data-act="start" data-arg="pick:' + rest.join(',') + '">남은 ' + rest.length + '개 이어서</button>' : s.kind === 'pick' ? '<button class="btn primary" data-act="go" data-arg="toc:">목차로</button>' : '<button class="btn primary" data-act="cont">다음 5분 이어서</button>') + '<button class="btn" data-act="sesHome">공부 탭으로</button></div></div>';
 }
 
+async function openSubject(sid){
+  if (SUB[sid]) return true;
+  const tt = setTimeout(() => toast('과목 내용을 불러오는 중이에요…'), 400);
+  const ok = await ensureSubject(sid); clearTimeout(tt);
+  if (!ok) { render(true); toast('과목 파일을 불러오지 못했어요. 아래 알림을 확인하세요'); }
+  return ok;
+}
 Object.assign(ACT, {
-  enter: a => { enterSubject(a, 'study'); render(true); },
-  enterGo: a => { enterSubject(a, 'study'); contSession(); },
+  enter: async a => { if (!(await openSubject(a))) return; enterSubject(a, 'study'); render(true); },
+  enterGo: async a => { if (!(await openSubject(a))) return; enterSubject(a, 'study'); contSession(); },
+  smode: a => {
+    const i = a.lastIndexOf(':'); const sid = a.slice(0, i), m = a.slice(i + 1); if (!MODES[m]) return;
+    const s = SS(sid); const prev = s.mode || 'all'; s.mode = m;
+    if (m === 'cram' && (!s.cramAt || Date.now() - s.cramAt > 20 * HOUR)) s.cramAt = Date.now(); /* 새 당일치기 회차 */
+    if (prev !== m) { s.scope = null; if (R.t) R.t.sel = null; S.set.noteRange = m === 'cram' ? 'top' : m === 'core' ? 'top2' : 'all'; R.sheetCache = null; }
+    save(); render(); if (prev !== m) toast(MODES[m].name + ' 모드: ' + MODES[m].desc);
+  },
+  sadd: a => { const i = a.lastIndexOf(':'); const sid = a.slice(0, i); SS(sid).noAdd = a.slice(i + 1) === '0'; R.sheetCache = null; save(); render(); toast(SS(sid).noAdd ? '추가 내용은 빼고 공부해요. 기록은 그대로 남아요' : '추가 내용도 같이 공부해요'); },
+  subjpick: () => { R.t.subjPick = !R.t.subjPick; render(true); },
+  subjhide: a => { const h = S.set.hideSubj || (S.set.hideSubj = {}); if (h[a]) delete h[a]; else h[a] = 1; save(); render(); },
+  rangenote: () => { S.set.noteRange = modeOf() === 'core' ? 'top2' : 'top'; R.sheetCache = null; save(); ACT.tab('note'); },
   subjects: () => { leaveSubject(); render(true); },
   updok: () => { R.update = null; render(); },
+  order: a => { S.set.order = a === 'pr' ? 'pr' : 'toc'; save(); toast(a === 'pr' ? '★★★ 자주 출제 → ★★ 중요 → ★ 기본 순서로 새 개념이 나와요' : '목차 순서대로 새 개념이 나와요'); render(); },
   home: () => {
     const top = cur(); const busy = top && ((top.name === 'session' && SS().ses) || (top.name === 'quiz' && SS().qz && !SS().qz.done));
     R.sheet = null; while (R.stack.length) onLeave(R.stack.pop());
@@ -903,7 +1162,10 @@ function vQuizTab(){
   const all = allQ(); const qa = qStats(all); const pool = reviewPool().length; const z = SS().qz;
   const open = all.filter(unlocked).length; const mcs = all.filter(q => q.type === 'mc');
   const nNs = scoped(mcs.filter(q => q.lv === 2)).length, nCase = scoped(mcs.filter(q => q.case || q.tag === '사례형')).length, nMc = scoped(mcs).length;
+  const nTop = scoped(mcs.filter(isTopQ)).length, nAddAll = all.filter(isAdd).length, nAdd = scoped(all.filter(isAdd)).length;
   let h = subjTop() + '<section><h1>문제</h1><p class="sub">문제는 관련 개념을 모두 배우면 열려요. 틀렸거나 애매했던 문제는 다시 나오고, 2번 연속 깔끔하게 맞히면 졸업해요.</p>' +
+    (modeOf() !== 'all' ? '<p class="mode-note"><b>' + MODES[modeOf()].name + '</b> 모드라 ' + MODES[modeOf()].range + ' 개념의 문제만 나와요. 공부 탭이나 첫 화면에서 모드를 바꿀 수 있어요.</p>' : '') +
+    (addOff() ? '<p class="mode-note">추가 내용은 빼고 공부하는 중이라 추가된 문제는 나오지 않아요.</p>' : '') +
     '<div class="stats3"><div><b>' + qa.att + '<small>/' + all.length + '</small></b><span>푼 문제</span></div><div><b>' + (qa.acc == null ? '–' : qa.acc + '%') + '</b><span>정답률</span></div><div><b>' + pool + '</b><span>다시 풀 문제</span></div></div>';
   if (z && !z.done) {
     const left = z.limit ? z.limit - z.used : 0;
@@ -912,8 +1174,11 @@ function vQuizTab(){
   h += '<div class="seg scope" role="group" aria-label="문제 범위"><button data-act="qscope" data-arg="0" aria-pressed="' + !S.set.qAll + '">배운 범위만 · 열린 ' + open + '문제</button><button data-act="qscope" data-arg="1" aria-pressed="' + !!S.set.qAll + '">전체 범위</button></div>' +
     '<div class="list">' +
     lrow('quiz', 'ns:', '국시형만 풀기', (nNs > 15 ? nNs + '문제 중 15문제' : nNs + '문제') + ' · 사례형, 우선순위, 부정형, 수치 해석', { dis: !nNs }) +
+    (modeOf() !== 'all' ? lrow('quiz', 'range:', MODES[modeOf()].range + ' 범위 문제 테스트', '객관식 15 + O/X 5 · 지금 모드의 범위에서', { dis: !nMc }) : '') +
+    lrow('quiz', 'top:', '자주 출제 개념 문제', (nTop > 15 ? nTop + '문제 중 15문제' : nTop + '문제') + ' · ★★★ 개념과 연결된 문제', { dis: !nTop, tag: ' <span class="prs p3">★★★</span>' }) +
     lrow('quiz', 'pool:', '다시 풀 문제', pool ? pool + '문제 · 틀렸거나 애매했거나 힌트를 본 문제' : '아직 없어요', { dis: !pool }) +
-    lrow('quiz', 'case:', '사례형 집중', (nCase > 15 ? nCase + '문제 중 15문제' : nCase + '문제') + ' · 환자 상황 문제', { dis: !nCase }) + '</div>' +
+    lrow('quiz', 'case:', '사례형 집중', (nCase > 15 ? nCase + '문제 중 15문제' : nCase + '문제') + ' · 환자 상황 문제', { dis: !nCase }) +
+    (nAddAll ? lrow('quiz', 'add:', '추가된 문제', (nAdd > 15 ? nAdd + '문제 중 15문제' : nAdd + '문제') + ' · 새로 추가된 개념의 문제', { dis: !nAdd, tag: ADD_TAG }) : '') + '</div>' +
     '<h3 class="h3">단원 테스트 <span>O/X 4개 + 객관식 8개</span></h3><div class="chips-wrap">' + X.units.map(u => { const n = scoped(all.filter(q => q.u === u.id)).length; return '<button class="chip-btn" data-act="quiz" data-arg="unit:' + u.id + '"' + (n ? '' : ' disabled') + '>' + u.n + '. ' + esc(u.short || u.title) + ' <span class="mono">' + n + '</span></button>'; }).join('') + '</div>' +
     '<h3 class="h3">실전 모의고사 <span>문제당 1분 · 해설은 끝나고 한꺼번에 · 중간에 나가도 이어서 풀 수 있어요</span></h3><div class="row-btns">' +
     '<button class="btn" data-act="quiz" data-arg="mock:20"' + (nMc ? '' : ' disabled') + '>20문제</button><button class="btn" data-act="quiz" data-arg="mock:40"' + (nMc ? '' : ' disabled') + '>40문제</button></div>' +
@@ -928,6 +1193,7 @@ function vQuizTab(){
 
 /* ───────── 문제 풀기 ───────── */
 function ensureAns(z, q){ return z.ans[q.id] || (z.ans[q.id] = { perm: permFor(q) }); }
+function isTopQ(q){ return links(q).some(cid => X.cmap[cid] && X.cmap[cid].pr === 3); }
 function startQuiz(mode, arg){
   const all = allQ(); let ids = [], title = '', instant = true, limit = 0, set = null;
   const mcs = all.filter(q => q.type === 'mc');
@@ -941,9 +1207,19 @@ function startQuiz(mode, arg){
     const pool = shuffle(scoped(mcs)); const n = Math.min(+arg || 20, pool.length);
     ids = pool.slice(0, n).map(q => q.id); instant = false; limit = n * MIN; title = '실전 모의고사 ' + n + '문제';
   } else if (mode === 'pool') { ids = reviewPool().map(q => q.id); title = '다시 풀 문제'; }
+  else if (mode === 'range') { const pool = scoped(all); ids = shuffle(pool.filter(q => q.type === 'mc')).slice(0, 15).concat(shuffle(pool.filter(q => q.type === 'ox')).slice(0, 5)).map(q => q.id); title = MODES[modeOf()].range + ' 문제 테스트'; }
+  else if (mode === 'top') { ids = shuffle(scoped(mcs.filter(isTopQ))).slice(0, 15).map(q => q.id); title = '★★★ 자주 출제 개념 문제'; }
+  else if (mode === 'add') { const pool = scoped(all.filter(isAdd)); ids = shuffle(pool.filter(q => q.type === 'mc')).slice(0, 12).concat(shuffle(pool.filter(q => q.type === 'ox')).slice(0, 3)).map(q => q.id); title = '추가된 문제'; }
   else if (mode === 'case') { ids = shuffle(scoped(mcs.filter(q => q.case || q.tag === '사례형'))).slice(0, 15).map(q => q.id); title = '사례형 집중'; }
   else if (mode === 'custom') { ids = shuffle(customQs()).map(q => q.id); title = '내가 넣은 문제'; }
-  else if (mode === 'cq') { ids = shuffle(all.concat(gcQs()).filter(q => links(q).includes(arg) && (!q.gc || q.a >= 0))).map(q => q.id); title = (X.cmap[arg] ? X.cmap[arg].t : '개념') + ' 문제'; }
+  else if (mode === 'sel') {
+    const set = new Set(String(arg).split(','));
+    const pool = scoped(all.concat(gcQs()).filter(q => links(q).some(c => set.has(c)) && (!q.gc || q.a >= 0)));
+    ids = shuffle(pool.filter(q => q.type === 'mc')).slice(0, 15).concat(shuffle(pool.filter(q => q.type === 'ox')).slice(0, 5)).map(q => q.id);
+    title = '고른 개념 문제';
+    if (!ids.length) { toast('고른 개념을 아직 배우지 않아서 열린 문제가 없어요. ‘고른 것 공부’를 먼저 하거나 문제 탭에서 ‘전체 범위’를 고르세요'); return; }
+  }
+  else if (mode === 'cq') { ids = shuffle(allQx().concat(gcQs()).filter(q => links(q).includes(arg) && (!q.gc || q.a >= 0))).map(q => q.id); title = (X.cmap[arg] ? X.cmap[arg].t : '개념') + ' 문제'; }
   else if (mode === 'gset') {
     const qs = G.qs.filter(g => g.set === arg && gReady(g)).sort((a, b) => a.no - b.no);
     ids = qs.map(g => g.id); instant = false; limit = Math.round(qs.length * 0.9 * MIN); title = setTitle(arg) + ' · 실전처럼'; set = arg;
@@ -1027,6 +1303,26 @@ function nsState(ns){
   if (ns === 'qv') { const p = cur() && cur().p; const q = p && Q(p.id); if (!q) return null; if (!R.t.qv || R.t.qv.id !== p.id) R.t.qv = { id: p.id, st: { perm: permFor(q) } }; return { q, st: R.t.qv.st }; }
   return null;
 }
+
+/* ───────── 문제 고치기 · 빼기 (이 기기에만, 보내기로 공유) ───────── */
+V.qedit = p => {
+  const q = X.qmap[p.id]; const b = (X.qbase && X.qbase[p.id]) || q;
+  if (!q || q.gc || q.src === 'custom' || q.mine) return subBar('문제 고치기') + '<p class="empty">여기서 고칠 수 없는 문제예요.</p>';
+  const isOX = q.type === 'ox', hid = !!SS().qh[q.id], ed = !!SS().qe[q.id];
+  if (R.t.qeId !== q.id) { R.t.qeId = q.id; R.t.qeA = q.a; }
+  const a = R.t.qeA;
+  return subBar('문제 고치기') + '<section><p class="sub">정답이 틀렸거나 보기·해설이 이상하면 고쳐요. 이 기기에만 저장되고, 진도 탭의 ‘고친 내용 모아 보기’에서 친구에게 보내거나 모두에게 반영할 수 있어요.</p>' +
+    (hid ? '<div class="notice"><b>뺀 문제예요</b><p>문제 풀기와 복습에 나오지 않아요.</p></div>' : '') +
+    '<label class="lbl" for="qe-q">문제</label><textarea id="qe-q" rows="3">' + esc(q.q) + '</textarea>' +
+    (isOX ? '' : '<label class="lbl">보기</label>' + q.o.map((o, i) => '<div class="qe-o"><span class="on">' + CIRC[i] + '</span><input id="qe-o' + i + '" value="' + esc(o) + '" aria-label="보기 ' + (i + 1) + '"></div>').join('')) +
+    '<label class="lbl">정답</label><div class="seg sm qe-a" role="group" aria-label="정답">' + q.o.map((o, i) => '<button data-act="qeA" data-arg="' + i + '" aria-pressed="' + (a === i) + '">' + (isOX ? esc(o) : CIRC[i]) + '</button>').join('') + '</div>' +
+    (isOX ? '' : '<label class="lbl" for="qe-k">묻는 것<span>한 줄 핵심 (없어도 돼요)</span></label><input id="qe-k" value="' + esc(q.k || '') + '">') +
+    '<label class="lbl" for="qe-e">정답 이유</label><textarea id="qe-e" rows="3">' + esc(q.e || '') + '</textarea>' +
+    (isOX ? '' : '<details class="why"><summary>보기별 해설 (선택)</summary>' + q.o.map((o, i) => '<div class="qe-o"><span class="on">' + CIRC[i] + '</span><input id="qe-x' + i + '" value="' + esc((q.x || [])[i] || '') + '" aria-label="보기 ' + (i + 1) + ' 해설"></div>').join('') + '<p class="hint">정답 보기의 칸은 비워 둬도 돼요.</p></details>') +
+    '<div class="row-btns"><button class="btn primary" data-act="qesave" data-arg="' + q.id + '">저장</button>' + (ed ? '<button class="btn" data-act="qereset" data-arg="' + q.id + '">원래대로 되돌리기</button>' : '') +
+    '<button class="btn' + (hid ? '' : ' danger') + '" data-act="qehide" data-arg="' + q.id + '">' + (hid ? '다시 문제에 넣기' : '이 문제 빼기') + '</button></div>' +
+    (ed ? '<details class="why"><summary>원래 문제 보기</summary><p>' + esc(b.q) + '</p><p>정답: ' + (isOX ? esc(b.o[b.a]) : CIRC[b.a] + ' ' + esc(b.o[b.a])) + '</p>' + (b.e ? '<p>' + esc(b.e) + '</p>' : '') + '</details>' : '') + '</section>';
+};
 
 /* ───────── 내가 넣은 문제 ───────── */
 V.custom = () => {
@@ -1151,7 +1447,7 @@ function gParse(round, period, qtxt, atxt){
   const blocks = gSplit(gCleanLines(qtxt));
   const items = blocks.map(b => { const o = gOpts(b.lines.join(' ').replace(/\s+/g, ' ')); return { no: b.no, q: o.q, o: o.o, a: null, sub: guessSub(period, b.no), lk: [] }; });
   const ans = gAnswers(atxt, items.map(x => x.no));
-  items.forEach(it => { if (ans[it.no] != null && ans[it.no] < Math.max(it.o.length, 5)) it.a = ans[it.no]; it.lk = autoLink(it.q + ' ' + it.o.join(' '), ORDER); });
+  items.forEach(it => { if (ans[it.no] != null && ans[it.no] < Math.max(it.o.length, 5)) it.a = ans[it.no]; it.lk = autoLink(it.q + ' ' + it.o.join(' '), loadedIds()); });
   return { round, period, items, ts: Date.now() };
 }
 function itemWarn(it){
@@ -1245,7 +1541,7 @@ V.gset = p => {
 };
 SHEETV.picker = sh => {
   const d = S.gdraft; const it = d && d.items[sh.i]; if (!it) return '<p class="empty">문항을 찾을 수 없어요.</p>';
-  const sids = sh.other ? ORDER : [X.id];
+  const sids = sh.other ? loadedIds() : [X.id];
   const qq = nospace(sh.q || ''); const sel = new Set(it.lk.map(l => l[0] + '|' + l[1]));
   let list = '';
   sids.forEach(sid => {
@@ -1258,7 +1554,7 @@ SHEETV.picker = sh => {
   });
   return '<div class="sh-head"><div><div class="eyebrow">' + it.no + '번에 연결할 개념 · 최대 4개</div><h3>' + esc((it.q || '').slice(0, 60)) + (it.q.length > 60 ? '…' : '') + '</h3></div><button class="icon-btn" data-act="shclose" aria-label="닫기">' + ICON.close + '</button></div>' +
     '<div class="sh-body"><input id="pk-q" placeholder="개념 이름이나 낱말로 찾기" value="' + esc(sh.q || '') + '" autocomplete="off">' +
-    (ORDER.length > 1 ? '<label class="check"><input type="checkbox" id="pk-other"' + (sh.other ? ' checked' : '') + '> 다른 과목 내용 포함</label>' : '') +
+    (loadedIds().length > 1 ? '<label class="check"><input type="checkbox" id="pk-other"' + (sh.other ? ' checked' : '') + '> 다른 과목 내용 포함</label>' : '') +
     '<p class="hint">고른 개념 ' + it.lk.length + '개' + (it.lk.length ? ': ' + it.lk.map(l => (cOf(l[0], l[1]) || {}).t).join(', ') : '') + '</p>' +
     '<div class="pk-list">' + (list || '<p class="empty">찾는 개념이 없어요.</p>') + '</div>' +
     '<button class="btn primary big" data-act="shclose">완료</button></div>';
@@ -1323,7 +1619,24 @@ Object.assign(ACT, {
     render();
   },
   cdel: a => { if (R.t.confirm !== 'del-' + a) { R.t.confirm = 'del-' + a; render(); return; } SS().custom = SS().custom.filter(q => q.id !== a); delete SS().q[a]; R.t.confirm = null; save(); render(); },
-  gparse: () => {
+  qeA: (a, el) => { R.t.qeA = +a; const g = el && el.closest('.qe-a'); if (g) g.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.arg === a))); },
+  qesave: a => {
+    const q = X.qmap[a]; const b = (X.qbase && X.qbase[a]) || q; if (!q) return;
+    const v = id => { const el = $('#' + id); return el ? el.value.trim() : null; };
+    const isOX = q.type === 'ox'; const n = { q: v('qe-q') || b.q, a: R.t.qeA != null ? R.t.qeA : b.a, e: v('qe-e') || '' };
+    if (!isOX) {
+      n.o = b.o.map((o, i) => v('qe-o' + i)); if (n.o.some(o => !o)) { toast('보기를 비워 둘 수 없어요'); return; }
+      n.k = v('qe-k') || ''; n.x = b.o.map((o, i) => (v('qe-x' + i) || '')); n.x[n.a] = '';
+    }
+    const e = {}; Object.keys(n).forEach(k => { if (!same(n[k], k === 'x' ? (b.x || n.x.map(() => '')) : (b[k] == null && (k === 'e' || k === 'k') ? '' : b[k]))) e[k] = n[k]; });
+    if (e.a != null && !isOX && !e.x && b.x) e.x = n.x;
+    if (Object.keys(e).length) SS().qe[a] = e; else delete SS().qe[a];
+    applyLocal(X); R.t.qeId = null; save(); back(); toast(Object.keys(e).length ? '문제를 고쳤어요. 이 기기에서 바로 반영돼요' : '바뀐 내용이 없어요');
+  },
+  qereset: a => { delete SS().qe[a]; applyLocal(X); R.t.qeId = null; save(); render(); toast('원래 문제로 되돌렸어요'); },
+  qehide: a => { const h = SS().qh; if (h[a]) delete h[a]; else h[a] = Date.now(); save(); render(); toast(h[a] ? '이 문제를 뺐어요. 다시 넣을 수도 있어요' : '문제를 다시 넣었어요'); },
+  gparse: async () => {
+    if (loadedIds().length < ORDER.length) { toast('과목 내용을 불러오는 중이에요…'); await ensureAll(); }
     const round = $('#gp-round').value.trim().replace(/[^0-9]/g, ''), period = +$('#gp-period').value, qt = $('#gp-q').value, at = $('#gp-a').value;
     R.t.gp = { round, period, q: qt, a: at };
     if (qt.trim().length < 20) { R.t.gpMsg = '문제 글자를 붙여넣어 주세요.'; render(); return; }
@@ -1375,14 +1688,16 @@ Object.assign(ACT, {
 });
 
 /* ───────── 암기노트: 한 장 요약지 ───────── */
-const RANGE_LABEL = { all: '전체', learned: '배운 것만', weak: '약한 것만' };
+const RANGE_LABEL = { all: '전체', learned: '배운 것만', weak: '약한 것만', scope: '공부 범위', top: '★★★만', top2: '★★ 이상' };
+function XL(k){ return (X[k] || []).filter(addVisible); }
 function sheetConcepts(){
   const r = S.set.noteRange; const weak = weakSet();
-  return X.concepts.filter(c => r === 'all' ? true : r === 'learned' ? isLearned(c.id) : weak.has(c.id)).map(c => ({ c: C(c.id), weak: weak.has(c.id) }));
+  const sc = r === 'scope' ? new Set(scopeIds() || X.concepts.map(c => c.id)) : null;
+  return X.concepts.filter(addVisible).filter(c => r === 'all' ? true : r === 'learned' ? isLearned(c.id) : r === 'scope' ? sc.has(c.id) : r === 'top' ? c.pr === 3 : r === 'top2' ? c.pr >= 2 : weak.has(c.id)).map(c => ({ c: C(c.id), weak: weak.has(c.id) }));
 }
 function sheetItem(c, weak, mode){
   const m = mnList(c)[0];
-  let h = '<div class="ni' + (weak ? ' weak' : '') + '" data-act="nsheet" data-arg="' + c.id + '"><div class="ni-t">' + (weak ? '<i>!</i>' : '') + esc(c.t) + '</div>';
+  let h = '<div class="ni' + (weak ? ' weak' : '') + '" data-act="nsheet" data-arg="' + c.id + '"><div class="ni-t">' + (weak ? '<i>!</i>' : '') + '<span class="ns">' + '★'.repeat(c.pr || 2) + '</span>' + esc(c.t) + (isAdd(c) ? '<span class="na">추가</span>' : '') + '</div>';
   if (m) h += '<div class="ni-m">' + (m.k ? '<b class="ni-k">' + esc(m.k) + '</b> ' : '') + bold(m.s) + '</div>';
   if (mode === 'sum') {
     if (m && m.map && m.map.length) h += '<div class="ni-map">' + m.map.map(p => esc(p[0]) + '=' + esc(p[1])).join(' · ') + '</div>';
@@ -1398,16 +1713,16 @@ function sheetBlocks(){
     blocks.push('<div class="nu">' + u.n + '. ' + esc(u.title) + '</div>');
     items.forEach(x => blocks.push(sheetItem(x.c, x.weak, mode)));
   });
-  const nums = X.numbers.filter(n => units.has(n.u));
+  const nums = XL('numbers').filter(n => units.has(n.u));
   if (nums.length) { blocks.push('<div class="nh">숫자 기준값</div>'); nums.forEach(n => blocks.push('<div class="nn"><span>' + esc(n.k) + '</span><b>' + esc(n.v) + '</b></div>')); }
-  const prs = X.pairs.filter(p => units.has(p.u));
+  const prs = XL('pairs').filter(p => units.has(p.u));
   if (prs.length) { blocks.push('<div class="nh">헷갈리는 쌍</div>'); prs.forEach(p => blocks.push('<div class="np"><i>' + esc(p.t) + '</i><span>' + esc(p.a) + '</span><span>' + esc(p.b) + '</span></div>')); }
   return { blocks, n: list.length };
 }
 function sheetKey(){
   const s = SS();
   return JSON.stringify([X.id, S.set.noteRange, S.set.noteMode, hash(JSON.stringify(s.edits)), hash(JSON.stringify(s.mine)), hash(JSON.stringify(s.mnr)),
-    S.set.noteRange === 'all' ? 0 : X.concepts.filter(c => isLearned(c.id)).length, Array.from(weakSet()).join(',')]);
+    S.set.noteRange === 'all' ? 0 : X.concepts.filter(c => isLearned(c.id)).length, (SS().scope || []).join(','), Array.from(weakSet()).join(','), addOff(), X.concepts.map(c => c.id + c.pr + c.t).join('|')]);
 }
 function paginate(blocks, head){
   let M = $('#measure'); if (!M) { M = document.createElement('div'); M.id = 'measure'; document.body.appendChild(M); }
@@ -1437,7 +1752,7 @@ function buildSheet(){
   if (!R.sheetCache || R.sheetCache.key !== key) {
     const b = sheetBlocks();
     const d = new Date();
-    const head = '<b>' + esc(X.title) + ' 암기노트</b><span>' + RANGE_LABEL[S.set.noteRange] + ' · ' + (S.set.noteMode === 'sum' ? '요약 포함' : '암기용') + ' · 개념 ' + b.n + '개 · ' + d.getFullYear() + '.' + (d.getMonth() + 1) + '.' + d.getDate() + '</span>';
+    const head = '<b>' + esc(X.title) + ' 암기노트</b><span>' + RANGE_LABEL[S.set.noteRange] + ' · ' + (S.set.noteMode === 'sum' ? '요약 포함' : '암기용') + ' · 개념 ' + b.n + '개 · ★★★ 자주 출제 ★★ 중요 ★ 기본 · ' + d.getFullYear() + '.' + (d.getMonth() + 1) + '.' + d.getDate() + '</span>';
     R.sheetCache = { key, pages: b.n ? paginate(b.blocks, head) : [], n: b.n };
     R.pdf = null;
   }
@@ -1462,12 +1777,14 @@ function pdfBox(){
     (canShareFiles() ? '' : '<p class="hint">이 화면에서는 바로 보내기가 안 돼요. 파일로 저장한 뒤 카카오톡이나 메일에 첨부하세요.</p>') + '</div>';
 }
 function sheetUI(){
+  if (S.set.noteRange === 'scope' && !scopeIds()) S.set.noteRange = 'all';
   const r = S.set.noteRange, m = S.set.noteMode, z = S.set.noteZoom;
   const seg = (act, cur, opts) => '<div class="seg sm" role="group">' + opts.map(o => '<button data-act="' + act + '" data-arg="' + o[0] + '" aria-pressed="' + (cur === o[0]) + '">' + o[1] + '</button>').join('') + '</div>';
-  return '<div class="ctl"><span class="ctl-l">범위</span>' + seg('nrange', r, [['all', '전체'], ['learned', '배운 것만'], ['weak', '약한 것만']]) + '</div>' +
+  const ro = [['all', '전체'], ['top', '★★★만'], ['top2', '★★ 이상'], ['learned', '배운 것만'], ['weak', '약한 것만']]; if (scopeIds()) ro.splice(1, 0, ['scope', '공부 범위']);
+  return '<div class="ctl"><span class="ctl-l">범위</span>' + seg('nrange', r, ro) + '</div>' +
     '<div class="ctl"><span class="ctl-l">내용</span>' + seg('nmode', m, [['mn', '암기용만'], ['sum', '요약 포함']]) + '</div>' +
     '<div class="ctl"><span class="ctl-l">보기</span>' + seg('nzoom', z, [['fit', '한눈에'], ['big', '크게 읽기']]) + '</div>' +
-    '<p class="hint"><span id="npages">요약지 만드는 중…</span> · 항목을 누르면 요약 → 전체 설명이 열려요. 약한 개념은 분홍 바탕에 ! 표시예요.</p>' +
+    '<p class="hint"><span id="npages">요약지 만드는 중…</span> · 항목을 누르면 요약 → 전체 설명이 열려요. 제목 앞 ★은 시험 중요도, 약한 개념은 분홍 바탕에 ! 표시예요.</p>' +
     '<div id="pdfarea">' + pdfBox() + '</div>' +
     '<div id="a4wrap" class="a4wrap' + (z === 'big' ? ' big' : '') + '"></div>';
 }
@@ -1477,10 +1794,10 @@ function toolsUI(){
   return '<div class="list">' +
     lrow('go', 'figprac:', '그림 연습', imgsN ? '그림 ' + imgsN + '장 · 위치 ' + fm.n + '곳 중 ' + fm.ok + '곳 마스터' : '내 그림에 번호를 찍으면 위치 문제로 연습해요') +
     lrow('acro', '', '머리글자 퀴즈', acroN ? '배운 개념 ' + acroN + '개 · 첫 글자만 보고 뜻 떠올리기' : '개념을 배우면 열려요', { dis: !acroN }) +
-    lrow('go', 'tables:', '빈칸 표', X.tables.length + '개 · 칸을 가리고 떠올리기') +
-    lrow('go', 'orders:', '순서 맞추기', X.orders.length + '개 · 순서를 손으로 익히기') +
-    lrow('go', 'pairs:', '헷갈리는 쌍', X.pairs.length + '개 · 오른쪽을 가리고 떠올리기') +
-    lrow('go', 'numbers:', '숫자 기준값', X.numbers.length + '개 · 시험 직전용') +
+    lrow('go', 'tables:', '빈칸 표', XL('tables').length + '개 · 칸을 가리고 떠올리기') +
+    lrow('go', 'orders:', '순서 맞추기', XL('orders').length + '개 · 순서를 손으로 익히기') +
+    lrow('go', 'pairs:', '헷갈리는 쌍', XL('pairs').length + '개 · 오른쪽을 가리고 떠올리기') +
+    lrow('go', 'numbers:', '숫자 기준값', XL('numbers').length + '개 · 시험 직전용') +
     lrow('go', 'listen:', '듣기 모드', '이동 중에 귀로 복습') +
     lrow('go', 'figtodo:', '그림 넣을 개념', figConcepts().length + '개' + (todo ? ' · 나중에 넣기로 한 것 ' + todo + '개' : '')) + '</div>' +
     '<h3 class="h3">복습 카드 연습 <span>단원을 골라요 · 복습 일정은 바뀌지 않아요</span></h3><div class="chips-wrap">' + X.units.map(u => '<button class="chip-btn" data-act="start" data-arg="practice:' + u.id + '">' + u.n + '. ' + esc(u.short || u.title) + '</button>').join('') + '</div>' +
@@ -1547,9 +1864,9 @@ async function saveFile(name, data, mime){
 
 /* ───────── 연습 도구 ───────── */
 V.tables = () => subBar('빈칸 표') + '<section><p class="sub">칸을 가리고 떠올려요. 틀린 칸은 빨간 펜으로 표시해 두고 다시 연습해요.</p><div class="list">' +
-  X.tables.map(t => lrow('go', 'table:' + t.id, t.title, X.umap[t.u].n + '단원 · ' + t.rows.length + '줄' + ((SS().tbl[t.id] || []).length ? ' · 틀린 칸 ' + SS().tbl[t.id].length : ''))).join('') + '</div></section>';
+  XL('tables').map(t => lrow('go', 'table:' + t.id, t.title, X.umap[t.u].n + '단원 · ' + t.rows.length + '줄' + ((SS().tbl[t.id] || []).length ? ' · 틀린 칸 ' + SS().tbl[t.id].length : ''), { tag: isAdd(t) ? ADD_TAG : '' })).join('') + '</div></section>';
 V.orders = () => subBar('순서 맞추기') + '<section><p class="sub">순서가 중요한 것들이에요. 첫 번째부터 차례대로 탭해요.</p><div class="list">' +
-  X.orders.map(o => lrow('go', 'order:' + o.id, o.title, o.items.length + '단계' + (SS().ord[o.id] ? ' · 최근 실수 ' + SS().ord[o.id].miss + '번' : ''))).join('') + '</div></section>';
+  XL('orders').map(o => lrow('go', 'order:' + o.id, o.title, (X.umap[o.u] ? X.umap[o.u].n + '단원 · ' : '') + o.items.length + '단계' + (SS().ord[o.id] ? ' · 최근 실수 ' + SS().ord[o.id].miss + '번' : ''), { tag: isAdd(o) ? ADD_TAG : '' })).join('') + '</div></section>';
 V.table = p => {
   const t = X.tables.find(x => x.id === p.id); if (!t) return subBar('빈칸 표') + '<p class="empty">표를 찾을 수 없어요.</p>';
   const mode = R.t.tmode || 'hide';
@@ -1583,18 +1900,18 @@ V.pairs = () => {
   const hideAll = R.t.pairHide !== false; const rev = R.t.prev || (R.t.prev = {});
   return subBar('헷갈리는 쌍') + '<section><p class="sub">왼쪽을 보고 짝을 먼저 떠올린 다음, 탭해서 확인하세요.</p>' +
     '<div class="seg" role="group"><button data-act="pairall" data-arg="hide" aria-pressed="' + hideAll + '">짝 가리기</button><button data-act="pairall" data-arg="show" aria-pressed="' + !hideAll + '">모두 보기</button></div>' +
-    '<div class="pairs">' + X.pairs.map((x, i) => { const show = !hideAll || rev[i];
-      return '<div class="pair"><b>' + X.umap[x.u].n + '단원 · ' + esc(x.t) + '</b><div class="pa">' + esc(x.a) + '</div><button class="pb' + (show ? '' : ' hid') + '" data-act="pairrev" data-arg="' + i + '">' + (show ? esc(x.b) : '탭해서 짝 확인') + '</button></div>'; }).join('') + '</div></section>';
+    '<div class="pairs">' + XL('pairs').map((x, i) => { const show = !hideAll || rev[i];
+      return '<div class="pair"><b>' + X.umap[x.u].n + '단원 · ' + esc(x.t) + (isAdd(x) ? ADD_TAG : '') + '</b><div class="pa">' + esc(x.a) + '</div><button class="pb' + (show ? '' : ' hid') + '" data-act="pairrev" data-arg="' + i + '">' + (show ? esc(x.b) : '탭해서 짝 확인') + '</button></div>'; }).join('') + '</div></section>';
 };
 V.numbers = () => {
   const hideAll = R.t.numHide !== false; const rev = R.t.nrev || (R.t.nrev = {});
   return subBar('숫자 기준값') + '<section><p class="sub">시험 직전에 보는 숫자 모음이에요. 값을 가리고 떠올려 보세요.</p>' +
     '<div class="seg" role="group"><button data-act="numall" data-arg="hide" aria-pressed="' + hideAll + '">값 가리기</button><button data-act="numall" data-arg="show" aria-pressed="' + !hideAll + '">모두 보기</button></div>' +
-    '<div class="list">' + X.numbers.map((x, i) => { const show = !hideAll || rev[i];
-      return '<div class="nrow"><span>' + esc(x.k) + '</span><button class="pb' + (show ? '' : ' hid') + '" data-act="numrev" data-arg="' + i + '">' + (show ? esc(x.v) : '?') + '</button></div>'; }).join('') + '</div></section>';
+    '<div class="list">' + XL('numbers').map((x, i) => { const show = !hideAll || rev[i];
+      return '<div class="nrow"><span>' + esc(x.k) + (isAdd(x) ? ADD_TAG : '') + '</span><button class="pb' + (show ? '' : ' hid') + '" data-act="numrev" data-arg="' + i + '">' + (show ? esc(x.v) : '?') + '</button></div>'; }).join('') + '</div></section>';
 };
 /* 머리글자 퀴즈 */
-function acroList(){ return X.concepts.filter(c => isLearned(c.id) && mnList(C(c.id)).some(m => m.map && m.map.length)); }
+function acroList(){ return CS().filter(c => isLearned(c.id) && mnList(C(c.id)).some(m => m.map && m.map.length)); }
 V.acro = () => {
   const a = R.t.ac; if (!a) return V.tables();
   const n = a.list.length;
@@ -1629,7 +1946,7 @@ function say(t){
 function stopListen(){ const L = R.t.listen; if (L) { L.token = null; L.playing = false; L.now = null; } try { speechSynthesis.cancel(); } catch (e) {} }
 async function runListen(){
   const L = R.t.listen; const token = L.token = Math.random();
-  const list = L.u === 'learned' ? X.concepts.filter(c => isLearned(c.id)) : X.umap[L.u].concepts;
+  const list = L.u === 'learned' ? CS().filter(c => isLearned(c.id)) : (UC(X.umap[L.u]).length ? UC(X.umap[L.u]) : X.umap[L.u].concepts);
   if (!list.length) { toast('먼저 개념을 배워야 들을 수 있어요'); return; }
   L.playing = true; render();
   const here = () => cur() && cur().name === 'listen';
@@ -1696,7 +2013,7 @@ Object.assign(ACT, {
 });
 
 /* ───────── 내 그림 ───────── */
-function figConcepts(){ return X.concepts.filter(c => c.fig); }
+function figConcepts(){ return CS().filter(c => c.fig); }
 function figTodoList(){ return Object.keys(SS().figTodo).filter(cid => X.cmap[cid] && !imgsOf(X.id, cid).length); }
 function parseTarget(t){ const p = String(t).split(':'); return p[0] === 'g' ? { sid: 'gichul', cid: p[1], gq: p[1] } : { sid: p[1], cid: p[2] }; }
 function ownerTitle(m){
@@ -1849,7 +2166,7 @@ V.imgview = p => {
     '<label class="lbl" for="iv-cap">설명 한 줄</label><div class="inline"><input id="iv-cap" value="' + esc(m.cap || '') + '"><button class="btn" data-act="icap" data-arg="' + m.id + '">저장</button></div>';
   if (own) {
     h += (sibs.length > 1 ? '<label class="lbl">순서 <span>' + (pos + 1) + '/' + sibs.length + '</span></label><div class="row-btns" style="margin-top:0"><button class="btn" data-act="iorder" data-arg="' + m.id + ':-1"' + (pos > 0 ? '' : ' disabled') + '>' + ICON.up + '앞으로</button><button class="btn" data-act="iorder" data-arg="' + m.id + ':1"' + (pos < sibs.length - 1 ? '' : ' disabled') + '>' + ICON.down + '뒤로</button></div>' : '') +
-      '<label class="lbl" for="iv-move">다른 개념으로 옮기기</label><div class="inline"><select id="iv-move">' + SUB[m.sid].units.map(u => '<optgroup label="' + u.n + '. ' + esc(u.title) + '">' + u.concepts.map(c => '<option value="' + c.id + '"' + (c.id === m.cid ? ' selected' : '') + '>' + esc(c.t) + '</option>').join('') + '</optgroup>').join('') + '</select><button class="btn" data-act="imove" data-arg="' + m.id + '">옮기기</button></div>';
+      '<label class="lbl" for="iv-move">다른 개념으로 옮기기</label><div class="inline"><select id="iv-move">' + (SUB[m.sid] ? SUB[m.sid].units : []).map(u => '<optgroup label="' + u.n + '. ' + esc(u.title) + '">' + u.concepts.map(c => '<option value="' + c.id + '"' + (c.id === m.cid ? ' selected' : '') + '>' + esc(c.t) + '</option>').join('') + '</optgroup>').join('') + '</select><button class="btn" data-act="imove" data-arg="' + m.id + '">옮기기</button></div>';
   }
   h += '<div class="row-btns" style="margin-top:22px"><button class="btn" data-act="idel" data-arg="' + m.id + '">' + ICON.trash + (R.t.confirm === 'idel-' + m.id ? '한 번 더 누르면 지워요' : '그림 지우기') + '</button></div></section>';
   return h;
@@ -2011,7 +2328,7 @@ function weekDays(){
   return out;
 }
 function vProg(){
-  const st = subjStats(); const cnt = { new: 0, learned: 0, known: 0, master: 0 }; X.concepts.forEach(c => cnt[status(c.id)]++);
+  const st = subjStats(); const cnt = { new: 0, learned: 0, known: 0, master: 0 }; CS().forEach(c => cnt[status(c.id)]++); const fxn = fixCounts();
   const weak = weakTop(3); const ill = Object.keys(SS().ill).filter(k => X.cmap[k]).sort((a, b) => SS().ill[b] - SS().ill[a]);
   const wk = weekDays(); const maxMin = Math.max(15, ...wk.map(x => x.min));
   const ex = SS().exams.slice(-8).reverse(); const fm = figMastery(X.id); const imgsN = IMG.meta.filter(m => m.sid === X.id).length;
@@ -2029,11 +2346,12 @@ function vProg(){
     '<h3 class="h3">시험 기록 <span>모의고사 · 단원 테스트 · 기출 회차 · 과락 40% / 합격 60%</span></h3>' + (ex.length ? '<div class="list">' + ex.map(e => { const d = new Date(e.ts); const pc = pct(e.ok, e.n); return '<div class="exrow"><span class="mono">' + (d.getMonth() + 1) + '/' + d.getDate() + '</span><span>' + esc(e.title) + '</span><b class="' + (pc < 40 ? 'low' : pc >= 60 ? 'hi' : '') + '">' + pc + '%</b></div>'; }).join('') + '</div>' : '<p class="hint">단원 테스트, 모의고사, 기출을 풀면 점수가 쌓여요.</p>') +
     '<h3 class="h3">내 그림</h3><div class="list">' + lrow('go', 'figprac:', '그림 연습', imgsN ? '그림 ' + imgsN + '장 · 위치 ' + fm.n + '곳 중 ' + fm.ok + '곳 마스터' : '아직 그림이 없어요') + lrow('go', 'figtodo:', '그림 넣을 개념', figConcepts().length + '개' + (figTodoList().length ? ' · 나중에 넣기로 한 것 ' + figTodoList().length + '개' : '')) + '</div>' +
     '<h3 class="h3">이번 주 공부 시간</h3><div class="week" role="img" aria-label="최근 7일 공부 시간">' + wk.map((x, i) => '<div class="wb' + (x.min ? '' : ' zero') + (i === 6 ? ' today' : '') + '"><i style="height:' + Math.max(4, Math.round(x.min / maxMin * 56)) + 'px"></i><span>' + WD[new Date(x.t).getDay()] + (x.min ? ' ' + x.min + '분' : '') + '</span></div>').join('') + '</div>' +
-    '<h3 class="h3">전체 내용</h3><div class="list">' + lrow('go', 'browse:', '전체 내용 미리 보기', X.units.length + '단원 · 개념 ' + X.concepts.length + '개 · 단원 → 개념 카드') + '</div>' +
+    '<h3 class="h3">전체 내용</h3><div class="list">' + lrow('go', 'toc:', '목차 · 골라 공부하기', '단원·개념별 배움 표시와 정답률') + lrow('go', 'browse:', '전체 내용 미리 보기', X.units.length + '단원 · 개념 ' + X.concepts.length + '개 · 단원 → 개념 카드') + '</div>' +
     '<h3 class="h3">내 노트</h3><div class="list">' +
     lrow('go', 'wrongs:', '오답노트', reviewPool().length + '문제 · 틀렸거나 애매했던 문제') +
     lrow('go', 'mine:', '내 암기법', nMine + '개') +
-    lrow('go', 'flags:', '확인 필요 표시', nFlag + '개 · 교수님 자료와 비교할 것') + '</div>' +
+    lrow('go', 'flags:', '확인 필요 표시', nFlag + '개 · 교수님 자료와 비교할 것') +
+    lrow('go', 'fixes:', '고친 내용 · 내 개념', (fxn.ce + fxn.my + fxn.qe + fxn.qh ? '고친 개념 ' + fxn.ce + ' · 내 개념 ' + fxn.my + ' · 고친 문제 ' + fxn.qe + ' · 뺀 문제 ' + fxn.qh : '개념 추가, 친구에게 보내기, 모두에게 반영하기')) + '</div>' +
     '<h3 class="h3">설정</h3><div class="list">' + lrow('go', 'settings:', '설정', '글자 크기 · 화면 · 그림 안내 · 저장 공간') + lrow('go', 'backup:', '기록 백업 · 불러오기', backupMeta(), { hl: !S.lastBackup || Date.now() - S.lastBackup > 7 * DAY }) + '</div></section>';
 }
 
@@ -2051,7 +2369,7 @@ function viewSeg(){
 }
 V.browse = () => subBar('전체 내용') + '<section><p class="sub">단원을 골라 개념 카드를 봐요. 처음엔 설명, 익숙해지면 요약, 나중엔 암기 요령만 보여요. 카드를 탭하면 바뀌어요.</p>' + viewSeg() +
   '<div class="units">' + X.units.map(u => {
-    const a = unitStats(u); const M = u.concepts.filter(c => status(c.id) === 'master').length;
+    const a = unitStats(u); const M = UC(u).filter(c => status(c.id) === 'master').length;
     return '<button class="unit" data-act="go" data-arg="unit:' + u.id + '"><span class="unit-n mono">' + u.n + '</span><span class="unit-b"><b>' + esc(u.title) + '</b><span class="meter"><i style="width:' + a.prog + '%"></i></span><span class="unit-m">개념 ' + a.n + '개 · 배움 ' + a.L + ' · 마스터 ' + M + ' · 정답률 ' + (a.acc == null ? '–' : a.acc + '%') + '</span></span></button>';
   }).join('') + '</div></section>';
 V.unit = p => {
@@ -2059,15 +2377,16 @@ V.unit = p => {
   return subBar(u.n + '. ' + u.title) + '<section>' + viewSeg() +
     '<ol class="clist">' + u.concepts.map(c => {
       const st = status(c.id); const im = imgsOf(X.id, c.id).length;
-      return '<li><button class="crow" data-act="go" data-arg="concept:' + c.id + '"><span class="mono cn">' + u.n + '-' + c.n + '</span><span class="ct">' + esc(c.t) + (c.imp ? '<span class="imp">중요</span>' : '') + (c.v === 2 ? '<span class="newc">새로</span>' : '') + '</span><span class="chip st-' + st + '">' + ST_LABEL[st] + '</span>' + (im ? '<span class="chip c-edit">그림 ' + im + '</span>' : '') + (SS().flags[c.id] ? '<span class="chip c-flag">확인 필요</span>' : '') + '</button></li>';
+      return '<li><button class="crow" data-act="go" data-arg="concept:' + c.id + '"><span class="mono cn">' + u.n + '-' + c.n + '</span><span class="ct">' + prMark(c) + esc(c.t) + cTags(c) + (inRange(c) ? '' : '<span class="outc">범위 밖</span>') + '</span><span class="chip st-' + st + '">' + ST_LABEL[st] + '</span>' + (im ? '<span class="chip c-edit">그림 ' + im + '</span>' : '') + (SS().flags[c.id] ? '<span class="chip c-flag">확인 필요</span>' : '') + '</button></li>';
     }).join('') + '</ol>' +
-    '<div class="row-btns"><button class="btn" data-act="start" data-arg="practice:' + u.id + '">이 단원 카드 연습</button><button class="btn" data-act="quiz" data-arg="unit:' + u.id + '">이 단원 테스트</button></div></section>';
+    '<div class="row-btns"><button class="btn" data-act="start" data-arg="practice:' + u.id + '">이 단원 카드 연습</button><button class="btn" data-act="quiz" data-arg="unit:' + u.id + '">이 단원 테스트</button></div>' +
+    '<button class="btn ghost addc-btn" data-act="mycnew" data-arg="' + u.id + '">' + ICON.edit + '이 단원에 내 개념 추가</button></section>';
 };
 V.concept = p => {
   const c = C(p.id); if (!c) return subBar('개념') + '<p class="empty">개념을 찾을 수 없어요.</p>';
   const u = X.umap[c.u]; const i = u.concepts.findIndex(x => x.id === c.id);
   const prev = u.concepts[i - 1], next = u.concepts[i + 1]; const lv = viewLevel(c.id);
-  const qs = allQ().concat(gcQs()).filter(q => links(q).includes(c.id)); const open = qs.filter(unlocked).length;
+  const qs = allQx().concat(gcQs()).filter(q => links(q).includes(c.id)); const open = qs.filter(unlocked).length;
   const im = imgsOf(X.id, c.id).length;
   return subBar(u.n + '. ' + u.title) + '<section>' + conceptHTML(c, lv, { learn: lv === 0 }) +
     (!isLearned(c.id) ? '<button class="btn primary big" data-act="markLearned" data-arg="' + c.id + '">배운 것으로 표시 · 복습 일정에 넣기</button>' : '') +
@@ -2075,16 +2394,45 @@ V.concept = p => {
     '<button class="btn" data-act="quiz" data-arg="cq:' + c.id + '"' + (qs.length ? '' : ' disabled') + '>이 개념 문제 ' + qs.length + (open < qs.length ? ' (열림 ' + open + ')' : '') + '</button></div>' +
     '<nav class="pn" aria-label="이전·다음 개념">' + (prev ? '<button class="btn" data-act="swap" data-arg="' + prev.id + '"><span>← ' + esc(prev.t) + '</span></button>' : '<span></span>') + (next ? '<button class="btn" data-act="swap" data-arg="' + next.id + '"><span>' + esc(next.t) + ' →</span></button>' : '<span></span>') + '</nav></section>';
 };
+function prSeg(key, cur){
+  if (R.t.prFor !== key) { R.t.prFor = key; R.t.prPick = cur; }
+  return '<div class="seg sm pr-seg" role="group" aria-label="중요도">' + [3, 2, 1].map(n => '<button data-act="prset" data-arg="' + n + '" aria-pressed="' + (R.t.prPick === n) + '"><span class="prs p' + n + '">' + starsHTML(n) + '</span>' + PR_LABEL[n] + '</button>').join('') + '</div>';
+}
 V.edit = p => {
-  const c = C(p.id), b = X.cmap[p.id], has = !!SS().edits[p.id];
-  return subBar('내용 수정') + '<section><h1 class="h-sm">' + esc(c.t) + '</h1><p class="sub">고친 내용은 이 기기에만 저장되고, 원래 내용으로 언제든 되돌릴 수 있어요. 설명·요약·암기 요령을 고치면 이 개념의 복습을 처음부터 다시 해요. 암기노트와 PDF에도 바로 반영돼요.</p>' +
+  const b0 = X.cmap[p.id]; if (!b0) return subBar('내용 수정') + '<p class="empty">개념을 찾을 수 없어요.</p>';
+  if (b0.mine) return V.myc({ id: p.id });
+  const c = C(p.id), b = b0, o = b.o0 || b, has = !!SS().edits[p.id];
+  return subBar('내용 수정') + '<section><h1 class="h-sm">' + esc(c.t) + '</h1><p class="sub">고친 내용은 이 기기에만 저장되고, 원래 내용으로 언제든 되돌릴 수 있어요. 설명·요약·암기 요령을 고치면 이 개념의 복습을 처음부터 다시 해요. 진도 탭의 ‘고친 내용’에서 친구에게 보내거나 모두에게 반영할 수 있어요.</p>' +
+    '<label class="lbl" for="ed-t">제목</label><input id="ed-t" value="' + esc(c.t) + '">' +
+    '<label class="lbl">시험 중요도<span>교수님이 강조했으면 올리고, 덜 중요하면 내려요. 공부 모드 범위가 바로 바뀌어요</span></label>' + prSeg('ed:' + p.id, c.pr) +
     '<label class="lbl" for="ed-mine">내 암기법<span>직접 만든 암기법이 가장 오래 남아요. 가장 먼저 보여요</span></label><textarea id="ed-mine" rows="3" placeholder="예: 기흉은 밀고, 무기폐는 당긴다">' + esc(SS().mine[p.id] || '') + '</textarea>' +
     '<label class="lbl" for="ed-mn">암기 요령<span>한 줄에 하나 · 머리글자 | 문장 · **굵게**</span></label><textarea id="ed-mn" rows="4">' + esc(c.mn.map(m => (m.k ? m.k + ' | ' : '') + m.s).join('\n')) + '</textarea>' +
     '<label class="lbl" for="ed-sum">요약<span>한 줄에 하나</span></label><textarea id="ed-sum" rows="6">' + esc(c.sum.join('\n')) + '</textarea>' +
     '<label class="lbl" for="ed-ex">설명<span>줄을 바꾸면 문단이 나뉘어요</span></label><textarea id="ed-ex" rows="9">' + esc(c.ex) + '</textarea>' +
+    '<label class="lbl" for="ed-note">보완 메모<span>수업에서 들은 것, 교수님이 강조한 것 (설명 아래에 보여요)</span></label><textarea id="ed-note" rows="3">' + esc(c.note || '') + '</textarea>' +
     '<div class="row-btns"><button class="btn primary" data-act="saveEdit" data-arg="' + p.id + '">저장</button>' +
     (has ? '<button class="btn" data-act="resetEdit" data-arg="' + p.id + '">' + (R.t.confirm === 'reset-' + p.id ? '한 번 더 누르면 되돌려요' : '원래 내용으로 되돌리기') + '</button>' : '') + '</div>' +
-    (has ? '<details class="why" style="margin-top:20px"><summary>원래 내용 보기</summary>' + sumHTML(b) + memoHTML(b.mn) + '</details>' : '') + '</section>';
+    (has ? '<details class="why" style="margin-top:20px"><summary>원래 내용 보기</summary><p><b>' + esc(o.t) + '</b> ' + starsHTML(o.pr) + '</p>' + sumHTML(b) + memoHTML(b.mn) + (b.note ? '<p class="c-note">' + esc(b.note) + '</p>' : '') + '</details>' : '') + '</section>';
+};
+/* ───────── 내 개념 추가 ───────── */
+V.myc = p => {
+  const isNew = !p.id || p.id === 'new' || /^new:/.test(p.id); const m = isNew ? null : (SS().myc || []).find(x => x.id === p.id);
+  if (!isNew && !m) return subBar('내 개념') + '<p class="empty">개념을 찾을 수 없어요.</p>';
+  const u0 = isNew && /^new:/.test(p.id) ? p.id.slice(4) : null;
+  const d = m || { u: u0 && X.umap[u0] ? u0 : X.units[0].id, t: '', pr: 2, ex: '', sum: [], mn: [], note: '', ox: [] };
+  const oxTxt = (d.ox || []).map(o => o[0] + ' | ' + (o[1] ? 'O' : 'X')).join('\n');
+  return subBar(isNew ? '내 개념 추가' : '내 개념 고치기') + '<section><p class="sub">교재나 수업에서 빠진 내용을 직접 넣어요. 넣은 개념은 새 개념 순서, 복습, 목차, 암기노트에 들어가요. 이 기기에만 저장되고, 진도 탭의 ‘고친 내용’에서 친구에게 보내거나 모두에게 반영할 수 있어요.</p>' +
+    '<label class="lbl" for="my-u">단원</label><select id="my-u">' + X.units.map(u => '<option value="' + u.id + '"' + (u.id === d.u ? ' selected' : '') + '>' + u.n + '. ' + esc(u.title) + '</option>').join('') + '</select>' +
+    '<label class="lbl" for="my-t">제목</label><input id="my-t" value="' + esc(d.t) + '" placeholder="예: 쿠스마울 호흡이 생기는 이유">' +
+    '<label class="lbl">시험 중요도<span>★★★이면 당일치기에도 들어가요</span></label>' + prSeg('my:' + (m ? m.id : 'new'), clampPr(d.pr)) +
+    '<label class="lbl" for="my-sum">요약<span>한 줄에 하나 · 시험에 나올 핵심</span></label><textarea id="my-sum" rows="4" placeholder="예: 대사성 산증을 보상하려고 깊고 빠르게 숨 쉰다">' + esc((d.sum || []).join('\n')) + '</textarea>' +
+    '<label class="lbl" for="my-mn">암기 요령<span>한 줄에 하나 · 머리글자 | 문장 · **굵게** (없어도 돼요)</span></label><textarea id="my-mn" rows="2">' + esc((d.mn || []).map(z => (z.k ? z.k + ' | ' : '') + z.s).join('\n')) + '</textarea>' +
+    '<label class="lbl" for="my-ex">설명<span>없어도 돼요</span></label><textarea id="my-ex" rows="5">' + esc(d.ex || '') + '</textarea>' +
+    '<label class="lbl" for="my-note">보완 메모<span>출처, 교수님 강조 등 (없어도 돼요)</span></label><input id="my-note" value="' + esc(d.note || '') + '">' +
+    '<label class="lbl" for="my-ox">O/X 문제<span>배운 직후 바로 확인용 · 한 줄에 하나 · 문장 | O 또는 문장 | X (없어도 돼요)</span></label><textarea id="my-ox" rows="2" placeholder="예: 쿠스마울 호흡은 대사성 알칼리증에서 나타난다. | X">' + esc(oxTxt) + '</textarea>' +
+    '<div class="row-btns"><button class="btn primary" data-act="mycsave" data-arg="' + (m ? m.id : 'new') + '">저장</button>' +
+    (m ? '<button class="btn danger" data-act="mycdel" data-arg="' + m.id + '">' + (R.t.confirm === 'mycdel-' + m.id ? '한 번 더 누르면 지워요' : '이 개념 지우기') + '</button>' : '') + '</div>' +
+    '<p class="note">교재나 교수님 자료 문장을 그대로 옮기지 말고 내 말로 정리하세요. 내 말로 쓰면 더 잘 외워지고, 나중에 모두와 나눌 때도 문제가 없어요.</p></section>';
 };
 V.mine = () => {
   const ids = Object.keys(SS().mine).filter(k => SS().mine[k] && X.cmap[k]);
@@ -2095,12 +2443,95 @@ V.flags = () => {
   return subBar('확인 필요') + '<section><p class="sub">공부하다 의심 가는 내용에 표시해 둔 개념이에요. 교수님 자료를 받으면 이것부터 비교하세요.</p>' + (ids.length ? '<div class="list">' + ids.map(k => lrow('go', 'concept:' + k, X.cmap[k].t, X.umap[X.cmap[k].u].n + '단원')).join('') + '</div>' : '<p class="empty">표시한 개념이 없어요. 개념 카드의 깃발 버튼으로 표시해요.</p>') + '</section>';
 };
 
+/* ───────── 고친 내용: 모아 보기 · 보내기 · 합치기 · 모두에게 반영 ───────── */
+function fixCounts(){
+  const s = SS();
+  return { ce: Object.keys(s.edits || {}).filter(k => X.cmap[k] && !X.cmap[k].mine).length, my: (s.myc || []).length,
+    qe: Object.keys(s.qe || {}).filter(k => X.qmap[k]).length, qh: Object.keys(s.qh || {}).filter(k => X.qmap[k]).length };
+}
+const FIELD_LABEL = { t: '제목', pr: '중요도', ex: '설명', sum: '요약', mn: '암기 요령', note: '보완 메모' };
+function fixPayload(){ const s = SS(); return { app: 'cheongjin-note', kind: 'fixes', v: 1, sid: X.id, title: X.title, ts: Date.now(), edits: s.edits || {}, myc: s.myc || [], qe: s.qe || {}, qh: Object.keys(s.qh || {}) }; }
+function buildFix(){
+  const s = SS(); const fx = JSON.parse(JSON.stringify(X.fix || {}));
+  fx.v = 1; fx.made = Date.now(); fx.concepts = fx.concepts || {}; fx.add = fx.add || []; fx.qs = fx.qs || {}; fx.hide = fx.hide || [];
+  Object.keys(s.edits || {}).forEach(id => {
+    const c = X.cmap[id]; if (!c || c.mine) return; const e = s.edits[id]; const o = {};
+    Object.keys(FIELD_LABEL).forEach(k => { if (e[k] != null) o[k] = e[k]; });
+    const ai = fx.add.findIndex(z => z.id === id);
+    if (ai >= 0) Object.assign(fx.add[ai], o); else fx.concepts[id] = Object.assign(fx.concepts[id] || {}, o);
+  });
+  (s.myc || []).forEach(m => { if (fx.add.some(z => z.id === m.id)) return; fx.add.push({ id: m.id, u: m.u, t: m.t, pr: clampPr(m.pr), ex: m.ex || '', sum: m.sum || [], mn: m.mn || [], note: m.note || '', ox: m.ox || [], kw: m.kw || [m.t] }); });
+  Object.keys(s.qe || {}).forEach(id => { fx.qs[id] = Object.assign(fx.qs[id] || {}, s.qe[id]); });
+  fx.hide = Array.from(new Set(fx.hide.concat(Object.keys(s.qh || {}))));
+  return fx;
+}
+async function shareText(name, text, mime){
+  try {
+    const f = new File([text], name, { type: mime });
+    if (navigator.canShare && navigator.share && navigator.canShare({ files: [f] })) { await navigator.share({ files: [f], title: name }); return true; }
+  } catch (e) { if (e && e.name === 'AbortError') return false; }
+  return saveFile(name, text, mime);
+}
+V.fixes = () => {
+  const s = SS(), n = fixCounts(), tot = n.ce + n.my + n.qe + n.qh, fx = X.fix;
+  let h = subBar('고친 내용 · 내 개념') + '<section><p class="sub">이 기기에서 고치고 보탠 내용이에요. 친구에게 보내거나, 받은 것을 합치거나, 모두의 앱에 반영할 파일을 만들 수 있어요.</p>' +
+    '<div class="stats4">' + [['고친 개념', n.ce], ['내 개념', n.my], ['고친 문제', n.qe], ['뺀 문제', n.qh]].map(z => '<div><b class="mono">' + z[1] + '</b><span>' + z[0] + '</span></div>').join('') + '</div>' +
+    '<button class="btn" data-act="mycnew" data-arg="">' + ICON.edit + '내 개념 추가하기</button>' +
+    '<p class="hint">개념 고치기는 개념 카드의 연필 버튼, 문제 고치기는 문제를 푼 뒤 해설 아래 ‘문제가 이상해요?’에서 해요.</p>';
+  if (n.my) h += '<h3 class="h3">내 개념 <span>' + n.my + '개</span></h3><div class="list">' + s.myc.map(m => lrow('go', 'concept:' + m.id, m.t, (X.umap[m.u] ? X.umap[m.u].n + '단원 · ' : '') + '★'.repeat(clampPr(m.pr)) + ' · ' + ST_LABEL[status(m.id)])).join('') + '</div>';
+  if (n.ce) h += '<h3 class="h3">고친 개념 <span>' + n.ce + '개</span></h3><div class="list">' + Object.keys(s.edits).filter(k => X.cmap[k] && !X.cmap[k].mine).map(k => lrow('go', 'concept:' + k, X.cmap[k].t, X.umap[X.cmap[k].u].n + '단원 · 고친 곳: ' + Object.keys(s.edits[k]).map(f => FIELD_LABEL[f]).filter(Boolean).join(', '))).join('') + '</div>';
+  const qids = Array.from(new Set(Object.keys(s.qe || {}).concat(Object.keys(s.qh || {})))).filter(id => X.qmap[id]);
+  if (qids.length) h += '<h3 class="h3">고친 문제 · 뺀 문제 <span>' + qids.length + '개</span></h3><div class="list">' + qids.map(id => { const q = X.qmap[id]; return lrow('go', 'qedit:' + id, q.q.length > 50 ? q.q.slice(0, 50) + '…' : q.q, (s.qh[id] ? '뺀 문제' : '고친 문제') + (q.u && X.umap[q.u] ? ' · ' + X.umap[q.u].n + '단원' : '')); }).join('') + '</div>';
+  h += '<h3 class="h3">친구에게 보내기 <span>고친 내용만 담긴 작은 파일 · 학습 기록은 안 들어가요</span></h3>' +
+    '<div class="row-btns"><button class="btn primary" data-act="fxsend"' + (tot ? '' : ' disabled') + '>' + ICON.share + '고친 내용 보내기</button><button class="btn" data-act="fxcopy"' + (tot ? '' : ' disabled') + '>복사하기</button></div>' +
+    '<h3 class="h3">받은 고친 내용 합치기 <span>내가 이미 고친 곳은 내 것을 그대로 둬요</span></h3>' +
+    '<input type="file" id="fx-file" accept=".json,application/json,text/plain"><label class="lbl" for="fx-in">또는 받은 내용 붙여넣기</label><textarea id="fx-in" rows="3"></textarea>' +
+    (R.t.fxPending ? '<div class="confirm"><p>' + esc(R.t.fxPending.info) + '</p><div class="row-btns"><button class="btn primary" data-act="fxapply">합치기</button><button class="btn" data-act="fxcancel">취소</button></div></div>' : '<div class="row-btns"><button class="btn" data-act="fxload">읽어 보기</button></div>') +
+    '<h3 class="h3">모두의 앱에 반영하기 <span>앱을 GitHub에 올리는 사람용</span></h3>' +
+    '<ol class="steps"><li>친구들에게 받은 고친 내용을 위에서 모두 합쳐요.</li><li><b>반영 파일 만들기</b>를 눌러 <code>' + esc(X.id) + '-fix.js</code> 파일을 받아요.</li><li>GitHub 저장소의 <b>subjects</b> 폴더 → <b>Add file → Upload files</b>로 올리고 <b>Commit changes</b>.</li><li>1~2분 뒤 모든 사람의 앱에 반영돼요. 바뀐 개념은 다시 복습에 들어가고, 내 기기의 같은 수정은 저절로 정리돼요.</li></ol>' +
+    '<button class="btn primary big" data-act="fxmake"' + (tot || fx ? '' : ' disabled') + '>반영 파일 만들기</button>' +
+    (fx ? '<p class="hint">지금 앱에는 ' + (fx.made ? new Date(fx.made).toLocaleDateString('ko-KR') + '에 만든 ' : '') + '반영 파일이 들어 있어요. 새로 만들면 그 내용까지 모두 담겨요.</p>' : '') +
+    '<p class="note">교재나 교수님 자료 문장을 그대로 옮기지 말고 내 말로 고쳐 쓰세요. 반영 파일은 공개 저장소(GitHub)에 올라가요. 기출문제는 넣지 마세요.</p></section>';
+  return h;
+};
+
+/* ───────── 목차: 골라 공부하기 ───────── */
+V.toc = () => {
+  if (!R.t.sel) R.t.sel = (scopeIds() || []).slice();
+  const sel = new Set(R.t.sel); const acc = conceptQAcc(); const weak = weakSet();
+  if (!R.t.tocOpen) { R.t.tocOpen = {}; const nx = X.concepts.find(c => sel.has(c.id)) || X.concepts.find(c => !isLearned(c.id)); if (nx) R.t.tocOpen[nx.u] = true; }
+  const open = R.t.tocOpen;
+  let h = subBar('목차') + '<section class="toc"><p class="sub">공부할 단원이나 개념을 고르세요. ‘고른 것 공부’를 누르면 그 범위 안에서 공부하고, 범위가 저장돼서 ‘이어서 공부하기’도 그 안에서 진행돼요.' + (modeOf() !== 'all' ? ' 지금은 <b>' + MODES[modeOf()].name + '</b> 모드라 ' + MODES[modeOf()].range + '가 아닌 개념은 흐리게 보여요. 골라서 공부할 수는 있어요.' : '') + '</p>' +
+    '<div class="tlegend"><span><b class="tck on sm">✓</b>고름</span><span><i class="wk">!</i>약함 (정답률 낮음·착각)</span><span>괄호 = 푼 문제 수</span><span>' + ADD_TAG + '새로 추가된 내용</span></div>' +
+    '<div class="tlegend prl"><span><span class="prs p3">★★★</span>자주 출제</span><span><span class="prs p2">' + starsHTML(2) + '</span>중요</span><span><span class="prs p1">' + starsHTML(1) + '</span>기본</span></div>' +
+    '<div class="chips-wrap tsel"><button class="chip-btn" data-act="tselq" data-arg="all">전체 고르기</button><button class="chip-btn" data-act="tselq" data-arg="none">모두 해제</button><button class="chip-btn" data-act="tselq" data-arg="top"><span class="prs p3">★★★</span> 자주 출제</button><button class="chip-btn" data-act="tselq" data-arg="top2">★★ 이상</button>' + (X.concepts.some(c => c.add) && !addOff() ? '<button class="chip-btn" data-act="tselq" data-arg="add">추가된 내용</button>' : '') + (X.concepts.some(c => c.mine) ? '<button class="chip-btn" data-act="tselq" data-arg="mine">내 개념</button>' : '') + '<button class="chip-btn" data-act="tselq" data-arg="new">안 배운 것</button><button class="chip-btn" data-act="tselq" data-arg="weak">약한 것</button></div>';
+  X.units.forEach(u => {
+    const us = unitStats(u); const ids = u.concepts.filter(addVisible).map(c => c.id); const n = ids.filter(id => sel.has(id)).length;
+    const st = n === 0 ? '' : n === ids.length ? 'on' : 'part';
+    h += '<div class="tu"><div class="tu-h"><button class="tck ' + st + '" data-act="tunit" data-arg="' + u.id + '" aria-label="' + esc(u.title) + ' 단원 전체 고르기">' + (st === 'on' ? '✓' : st === 'part' ? '–' : '') + '</button>' +
+      '<button class="tu-t" data-act="topen" data-arg="' + u.id + '" aria-expanded="' + !!open[u.id] + '"><b>' + u.n + '. ' + esc(u.title) + '</b>' +
+      '<span class="tu-m">배움 ' + us.L + '/' + us.n + ' · 진도 ' + us.prog + '% · 정답률 ' + (us.acc == null ? '–' : us.acc + '%') + (n ? ' · <em>' + n + '개 고름</em>' : '') + '</span>' +
+      '<span class="tu-bars"><span class="ub2"><i style="width:' + us.prog + '%"></i></span><span class="ub2 acc"><i class="' + (us.acc != null && us.acc < 40 ? 'low' : '') + '" style="width:' + (us.acc || 0) + '%"></i></span></span></button>' +
+      '<span class="tu-chev' + (open[u.id] ? ' up' : '') + '" aria-hidden="true">' + ICON.down + '</span></div>';
+    if (open[u.id]) h += '<ul class="tlist">' + u.concepts.filter(addVisible).map(c => {
+      const s = status(c.id); const a = acc[c.id]; const ap = a ? Math.round(a.ok / a.att * 100) : null; const wk = weak.has(c.id) || (ap != null && ap < 60);
+      return '<li class="tc' + (sel.has(c.id) ? ' sel' : '') + (inRange(c) ? '' : ' out') + '"><button class="tck' + (sel.has(c.id) ? ' on' : '') + '" data-act="tpick" data-arg="' + c.id + '" aria-pressed="' + sel.has(c.id) + '" aria-label="' + esc(c.t) + ' 고르기">' + (sel.has(c.id) ? '✓' : '') + '</button>' +
+        '<button class="tc-t" data-act="go" data-arg="concept:' + c.id + '"><span class="tc-name"><span class="tc-n mono">' + u.n + '-' + c.n + '</span>' + prMark(c) + (wk ? '<i class="wk">!</i>' : '') + esc(c.t) + cTags(c) + '</span>' +
+        '<span class="tc-m"><span class="chip st-' + s + '">' + (s === 'new' ? '안 배움' : ST_LABEL[s]) + '</span>' + (ap != null ? '<span class="' + (ap < 60 ? 'low' : '') + '">정답률 ' + ap + '% (' + a.att + ')</span>' : '<span>문제 기록 없음</span>') + (inRange(c) ? '' : '<span class="outc">' + MODES[modeOf()].name + ' 범위 밖</span>') + '</span></button></li>';
+    }).join('') + '</ul>';
+    h += '</div>';
+  });
+  h += '</section><div class="tbar"><span class="tb-n"><b class="mono">' + sel.size + '</b>개 고름</span><button class="btn" data-act="tquiz"' + (sel.size ? '' : ' disabled') + '>문제 풀기</button><button class="btn primary" data-act="tstudy"' + (sel.size ? '' : ' disabled') + '>고른 것 공부</button></div>';
+  return h;
+};
+function tocOrdered(){ const sel = new Set(R.t.sel || []); return X.concepts.filter(c => sel.has(c.id)).map(c => c.id); }
+
 /* ───────── 검색 ───────── */
 function searchRes(q0){
   const q = nospace(q0); if (!q) return '<p class="hint">예: 웨버, 쿠스마울, 흉골각, 곤봉지, 수포음</p>';
   const cs = X.concepts.map(c => C(c.id)).filter(c => nospace(c.t).includes(q) || (c.kw || []).some(k => nospace(k).includes(q)) || (c.sum || []).some(s => nospace(s).includes(q)) || mnList(c).some(m => nospace(plain(m.s) + (m.k || '')).includes(q)) || nospace(c.ex).includes(q)).slice(0, 30);
   const qs = allQ().concat(gcQs()).filter(x => nospace(x.q).includes(q) || x.o.some(o => nospace(o).includes(q))).slice(0, 30);
-  return (cs.length ? '<h3 class="h3">개념 <span>' + cs.length + '개</span></h3><div class="list">' + cs.map(c => lrow('go', 'concept:' + c.id, c.t, X.umap[c.u].n + '단원 · ' + ST_LABEL[status(c.id)])).join('') + '</div>' : '') +
+  return (cs.length ? '<h3 class="h3">개념 <span>' + cs.length + '개</span></h3><div class="list">' + cs.map(c => lrow('go', 'concept:' + c.id, c.t, X.umap[c.u].n + '단원 · ' + '★'.repeat(c.pr) + ' ' + PR_LABEL[c.pr] + ' · ' + ST_LABEL[status(c.id)], { tag: cTags(c) })).join('') + '</div>' : '') +
     (qs.length ? '<h3 class="h3">문제 <span>' + qs.length + '개</span></h3><div class="list">' + qs.map(x => lrow('go', 'qview:' + x.id, x.q.length > 60 ? x.q.slice(0, 60) + '…' : x.q, (x.gc ? '실제 기출' : x.type === 'ox' ? 'O/X' : '객관식') + (unlocked(x) ? '' : ' · 아직 안 배운 내용'))).join('') + '</div>' : '') +
     (!cs.length && !qs.length ? '<p class="empty">찾는 내용이 없어요.</p>' : '');
 }
@@ -2115,7 +2546,7 @@ V.settings = () => {
     '<h3 class="h3">그림 넣기 안내 <span>새 개념을 배울 때 그림을 넣을지 물어봐요</span></h3><div class="seg" role="group"><button data-act="figset" data-arg="1" aria-pressed="' + !!S.set.figAsk + '">켜기</button><button data-act="figset" data-arg="0" aria-pressed="' + !S.set.figAsk + '">끄기</button></div>' +
     '<h3 class="h3">저장 공간</h3><div class="note" id="stor" style="margin-top:0">계산하는 중…</div>' +
     '<h3 class="h3">기록 지우기 <span>먼저 백업하세요</span></h3>' +
-    (X ? (t === 'wipeS' ? '<div class="confirm"><p>' + esc(X.title) + ' 과목의 학습 기록, 내 암기법, 내가 넣은 문제를 지울까요? 그림과 기출은 남아요.</p><div class="row-btns"><button class="btn danger" data-act="wipeS">지우기</button><button class="btn" data-act="wipeNo">취소</button></div></div>' : '<div class="row-btns"><button class="btn" data-act="wipeSask">' + esc(X.title) + ' 기록만 지우기</button></div>') : '') +
+    (X ? (t === 'wipeS' ? '<div class="confirm"><p>' + esc(X.title) + ' 과목의 학습 기록, 내 암기법, 내가 넣은 문제, 내 개념, 고친 내용을 지울까요? 그림과 기출은 남아요.</p><div class="row-btns"><button class="btn danger" data-act="wipeS">지우기</button><button class="btn" data-act="wipeNo">취소</button></div></div>' : '<div class="row-btns"><button class="btn" data-act="wipeSask">' + esc(X.title) + ' 기록만 지우기</button></div>') : '') +
     (t === 'wipe' ? '<div class="confirm"><p>모든 과목의 기록, 국시 기출, 내 그림까지 모두 지울까요?</p><div class="row-btns"><button class="btn danger" data-act="wipeYes">모두 지우기</button><button class="btn" data-act="wipeNo">취소</button></div></div>' : '<div class="row-btns"><button class="btn" data-act="wipe">모든 기록 지우기</button></div>') + '</section>';
 };
 async function fillStorage(){
@@ -2152,6 +2583,23 @@ function parseBackup(txt){
 }
 
 Object.assign(ACT, {
+  tpick: a => { const s = R.t.sel || (R.t.sel = []); const i = s.indexOf(a); if (i >= 0) s.splice(i, 1); else s.push(a); render(); },
+  tunit: a => { const s = R.t.sel || (R.t.sel = []); const ids = X.umap[a].concepts.filter(addVisible).map(c => c.id); const all = ids.every(id => s.includes(id)); R.t.sel = all ? s.filter(id => !ids.includes(id)) : Array.from(new Set(s.concat(ids))); render(); },
+  topen: a => { const o = R.t.tocOpen || (R.t.tocOpen = {}); o[a] = !o[a]; render(); },
+  tselq: a => {
+    const acc = conceptQAcc(); const weak = weakSet();
+    const pick = a === 'all' ? () => true : a === 'none' ? () => false : a === 'new' ? c => !isLearned(c.id)
+      : a === 'top' ? c => c.pr === 3 : a === 'top2' ? c => c.pr >= 2 : a === 'add' ? c => isAdd(c)
+      : c => weak.has(c.id) || (acc[c.id] && acc[c.id].ok / acc[c.id].att < 0.6);
+    R.t.sel = X.concepts.filter(addVisible).filter(a === 'mine' ? c => c.mine : pick).map(c => c.id);
+    if (a === 'add' && !R.t.sel.length) toast('추가된 내용이 아직 없어요');
+    if (a === 'weak' && !R.t.sel.length) toast('아직 약한 개념이 없어요. 문제를 풀면 정답률이 낮은 개념이 여기에 잡혀요');
+    if (a !== 'none') { const o = R.t.tocOpen || (R.t.tocOpen = {}); X.units.forEach(u => { if (u.concepts.some(c => R.t.sel.includes(c.id))) o[u.id] = true; }); }
+    render();
+  },
+  tstudy: () => { const ids = tocOrdered(); if (!ids.length) return; SS().scope = ids.length === X.concepts.filter(addVisible).length ? null : ids; save(); startSession('pick', ids.join(',')); },
+  tquiz: () => { const ids = tocOrdered(); if (!ids.length) return; startQuiz('sel', ids.join(',')); },
+  scopeclear: () => { SS().scope = null; R.t.sel = null; save(); render(); toast('공부 범위를 전체로 바꿨어요'); },
   tab: a => { while (R.stack.length) onLeave(R.stack.pop()); R.sheet = null; R.tab = a; render(true); },
   go: a => { const i = a.indexOf(':'); const name = i < 0 ? a : a.slice(0, i), id = i < 0 ? '' : a.slice(i + 1); if (!V[name]) return; go(name, { id }); },
   back: () => back(),
@@ -2179,22 +2627,57 @@ Object.assign(ACT, {
   mnsave: a => { const v = ($('#mine-in').value || '').trim(); if (v) SS().mine[a] = v; else delete SS().mine[a]; R.t.mnMine = null; save(); render(); toast(v ? '내 암기법을 저장했어요. 가장 먼저 보여요' : '내 암기법을 지웠어요'); },
   mndel: a => { delete SS().mine[a]; R.t.mnMine = null; save(); render(); },
   saveEdit: a => {
-    const b = X.cmap[a]; const mine = $('#ed-mine').value.trim();
+    const b = X.cmap[a]; const o = b.o0 || b; const mine = $('#ed-mine').value.trim();
     const mn = $('#ed-mn').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
       const i = l.indexOf('|'); const m = i >= 0 ? { k: l.slice(0, i).trim(), s: l.slice(i + 1).trim() } : { k: '', s: l };
-      const orig = (b.mn || []).find(o => o.k === m.k); if (orig && orig.map && orig.k) m.map = orig.map;
+      const orig = (b.mn || []).find(z => z.k === m.k); if (orig && orig.map && orig.k) m.map = orig.map;
       return m;
     });
     const sum = $('#ed-sum').value.split('\n').map(l => l.trim()).filter(Boolean);
-    const ex = $('#ed-ex').value.trim();
+    const ex = $('#ed-ex').value.trim(), t = $('#ed-t').value.trim(), note = $('#ed-note').value.trim();
+    const pr = R.t.prFor === 'ed:' + a ? R.t.prPick : o.pr;
     if (mine) SS().mine[a] = mine; else delete SS().mine[a];
-    const same = JSON.stringify(mn.map(m => [m.k, m.s])) === JSON.stringify((b.mn || []).map(m => [m.k, m.s])) && JSON.stringify(sum) === JSON.stringify(b.sum) && ex === b.ex;
-    const prev = JSON.stringify(SS().edits[a] || null);
-    if (same) delete SS().edits[a]; else SS().edits[a] = { ex, sum: sum.length ? sum : b.sum, mn: mn.length ? mn : b.mn };
-    if (JSON.stringify(SS().edits[a] || null) !== prev && isLearned(a)) { const s = crec(a); s.step = 0; s.due = nextDue(0, Date.now()); s.lv0 = true; }
-    save(); back(); toast('저장했어요');
+    const e = {};
+    if (ex && ex !== b.ex) e.ex = ex;
+    if (sum.length && !same(sum, b.sum)) e.sum = sum;
+    if (mn.length && !same(mnKS(mn), mnKS(b.mn))) e.mn = mn;
+    if (t && t !== o.t) e.t = t;
+    if (pr && pr !== o.pr) e.pr = pr;
+    if (note !== (b.note || '')) e.note = note;
+    const p0 = SS().edits[a] || {};
+    const body = z => [z.ex || null, z.sum || null, z.mn ? mnKS(z.mn) : null];
+    const changed = !same(body(p0), body(e));
+    if (Object.keys(e).length) SS().edits[a] = e; else delete SS().edits[a];
+    if (changed && isLearned(a)) { const s = crec(a); s.step = 0; s.due = nextDue(0, Date.now()); s.lv0 = true; }
+    applyLocal(X); R.sheetCache = null; R.t.prFor = null; save(); back(); toast('저장했어요');
   },
-  resetEdit: a => { if (R.t.confirm !== 'reset-' + a) { R.t.confirm = 'reset-' + a; render(); return; } delete SS().edits[a]; R.t.confirm = null; save(); render(); toast('원래 내용으로 되돌렸어요'); },
+  resetEdit: a => { if (R.t.confirm !== 'reset-' + a) { R.t.confirm = 'reset-' + a; render(); return; } delete SS().edits[a]; R.t.confirm = null; R.t.prFor = null; applyLocal(X); R.sheetCache = null; save(); render(); toast('원래 내용으로 되돌렸어요'); },
+  prset: (a, el) => { R.t.prPick = +a; const g = el && el.closest('.pr-seg'); if (g) g.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.arg === a))); },
+  mycnew: a => go('myc', { id: 'new:' + (a || '') }),
+  mycsave: a => {
+    const v = id => (($('#' + id) || {}).value || '').trim(); const lines = id => v(id).split('\n').map(l => l.trim()).filter(Boolean);
+    const t = v('my-t'), sum = lines('my-sum'), ex = v('my-ex');
+    if (!t) { toast('제목을 써 주세요'); return; }
+    if (!sum.length && !ex) { toast('요약이나 설명 중 하나는 써 주세요'); return; }
+    const mn = lines('my-mn').map(l => { const i = l.indexOf('|'); return i >= 0 ? { k: l.slice(0, i).trim(), s: l.slice(i + 1).trim() } : { k: '', s: l }; });
+    const ox = lines('my-ox').map(l => { const m = /^(.*)\|\s*([OoXx○×])\s*$/.exec(l); return m ? [m[1].trim(), /[Oo○]/.test(m[2]), ''] : null; }).filter(Boolean);
+    const key = 'my:' + a; const pr = R.t.prFor === key ? R.t.prPick : 2;
+    const list = SS().myc || (SS().myc = []);
+    const d = { u: v('my-u') || X.units[0].id, t, pr, sum: sum.length ? sum : [ex.split('\n')[0].slice(0, 80)], ex, mn, note: v('my-note'), ox, kw: [t] };
+    let id = a;
+    if (a === 'new') { id = uid('my'); list.push(Object.assign({ id, ts: Date.now() }, d)); }
+    else { const m = list.find(x => x.id === a); if (!m) return; Object.assign(m, d); }
+    applyLocal(X); R.sheetCache = null; R.t.prFor = null; save();
+    R.stack.pop(); if (a === 'new') go('concept', { id }); else render(true);
+    toast(a === 'new' ? (inRange(X.cmap[id]) ? '내 개념을 넣었어요. 새 개념 순서에 들어가요' : '내 개념을 넣었어요. 지금 공부 모드 범위 밖이라 목차에서 골라 공부할 수 있어요') : '고쳤어요');
+  },
+  mycdel: a => {
+    if (R.t.confirm !== 'mycdel-' + a) { R.t.confirm = 'mycdel-' + a; render(); return; }
+    SS().myc = (SS().myc || []).filter(x => x.id !== a); R.t.confirm = null;
+    if (SS().scope) SS().scope = SS().scope.filter(x => x !== a);
+    const z = SS().qz; if (z && z.ids) { z.ids = z.ids.filter(x => x.indexOf(a + '-') !== 0); if (!z.ids.length) SS().qz = null; else if (z.i >= z.ids.length) z.i = z.ids.length - 1; }
+    applyLocal(X); R.sheetCache = null; save(); R.stack = R.stack.filter(x => !(x.p && (x.p.id === a))); render(true); toast('내 개념을 지웠어요');
+  },
   shclose: () => { R.sheet = null; renderSheet(); },
   shfull: () => { R.sheet.full = !R.sheet.full; renderSheet(); },
   shopen: a => { R.sheet = null; renderSheet(); go('concept', { id: a }); },
@@ -2205,7 +2688,7 @@ Object.assign(ACT, {
   wipe: () => { R.t.confirm = 'wipe'; render(); },
   wipeSask: () => { R.t.confirm = 'wipeS'; render(); },
   wipeNo: () => { R.t.confirm = null; render(); },
-  wipeS: () => { S.subj[X.id] = freshSubj(); SS().lastUse = Date.now(); SS().known = { c: X.concepts.map(c => c.id), q: X.qs.map(q => q.id), h: {} }; X.concepts.forEach(c => { SS().known.h[c.id] = chash(c); }); R.t = {}; save(); R.stack = []; R.tab = 'study'; render(true); toast(X.title + ' 기록을 지웠어요'); },
+  wipeS: () => { S.subj[X.id] = freshSubj(); SS().lastUse = Date.now(); SS().known = { c: X.concepts.map(c => c.id), q: X.qs.map(q => q.id), h: {} }; X.concepts.forEach(c => { SS().known.h[c.id] = chash(c); }); applyLocal(X); R.t = {}; save(); R.stack = []; R.tab = 'study'; render(true); toast(X.title + ' 기록을 지웠어요'); },
   wipeYes: async () => {
     S = fresh(); G = { sets: [], qs: [] }; save(); saveG();
     try { for (const m of IMG.meta.slice()) await imgDel(m.id); } catch (e) {}
@@ -2235,9 +2718,39 @@ Object.assign(ACT, {
     const d = R.t.bkPending.data; S = d.S; save();
     if (d.G) { G = d.G; saveG(); }
     if (d.imgs && IMG.ok) { for (const m of d.imgs) { try { if (!m.data) continue; const rec = Object.assign({}, m); rec.full = dataURLToBlob(m.data); delete rec.data; await imgPut(rec); } catch (e) {} } }
-    R.t = {}; leaveSubject(); applySettings(); restoreRoute(); render(true); toast('기록을 불러왔어요');
+    R.t = {}; leaveSubject(); applySettings(); await restoreRouteAsync(); render(true); toast('기록을 불러왔어요');
   },
-  bkcancel: () => { R.t.bkPending = null; render(); }
+  bkcancel: () => { R.t.bkPending = null; render(); },
+  fxsend: async () => { const d = new Date(); const ok = await shareText('청진노트-고친내용-' + X.title + '-' + dkey(Date.now()) + '.json', JSON.stringify(fixPayload()), 'application/json'); if (ok) toast('보냈어요. 받은 사람은 ‘받은 고친 내용 합치기’에서 열면 돼요'); },
+  fxcopy: () => copyText(JSON.stringify(fixPayload()), '복사했어요. 카카오톡에 붙여넣어 보내세요'),
+  fxload: () => {
+    const raw = (R.t.fxRaw != null ? R.t.fxRaw : (($('#fx-in') || {}).value || '')).trim(); R.t.fxRaw = null;
+    let d; try { d = JSON.parse(raw); } catch (e) { toast('내용을 읽을 수 없어요. 받은 파일이나 글자를 빠짐없이 넣었는지 확인하세요'); return; }
+    if (!d || d.app !== 'cheongjin-note' || d.kind !== 'fixes') { toast('청진노트 고친 내용이 아니에요'); return; }
+    if (d.sid !== X.id) { toast('다른 과목(' + (d.title || d.sid) + ')의 고친 내용이에요. 그 과목에 들어가서 합쳐 주세요'); return; }
+    const s = SS(); let nw = 0, keep = 0;
+    Object.keys(d.edits || {}).forEach(k => { if (!X.cmap[k] || X.cmap[k].mine) return; if (!s.edits[k]) nw++; else if (!same(s.edits[k], d.edits[k])) keep++; });
+    (d.myc || []).forEach(m => { if (!(s.myc || []).some(x => x.id === m.id) && !X.cmap[m.id]) nw++; });
+    Object.keys(d.qe || {}).forEach(k => { if (!X.qmap[k]) return; if (!s.qe[k]) nw++; else if (!same(s.qe[k], d.qe[k])) keep++; });
+    (d.qh || []).forEach(k => { if (X.qmap[k] && !s.qh[k]) nw++; });
+    R.t.fxPending = { d, info: (d.title || '') + ' 고친 내용에서 새로 합칠 것 ' + nw + '개' + (keep ? ', 내가 이미 다르게 고친 곳 ' + keep + '개(내 것을 그대로 둬요)' : '') + '. 합칠까요?' };
+    render();
+  },
+  fxapply: () => {
+    const d = R.t.fxPending && R.t.fxPending.d; if (!d) return; const s = SS(); let n = 0;
+    Object.keys(d.edits || {}).forEach(k => { if (X.cmap[k] && !X.cmap[k].mine && !s.edits[k]) { s.edits[k] = d.edits[k]; n++; } });
+    (d.myc || []).forEach(m => { if (m && m.id && X.umap[m.u] && !(s.myc || []).some(x => x.id === m.id) && !X.cmap[m.id]) { (s.myc || (s.myc = [])).push(m); n++; } });
+    Object.keys(d.qe || {}).forEach(k => { if (X.qmap[k] && !s.qe[k]) { s.qe[k] = d.qe[k]; n++; } });
+    (d.qh || []).forEach(k => { if (X.qmap[k] && !s.qh[k]) { s.qh[k] = Date.now(); n++; } });
+    R.t.fxPending = null; applyLocal(X); R.sheetCache = null; save(); render(); toast(n + '개를 합쳤어요');
+  },
+  fxcancel: () => { R.t.fxPending = null; render(); },
+  fxmake: async () => {
+    const fx = buildFix();
+    const txt = '/* 청진노트 반영 파일: ' + X.title + ' (' + dkey(Date.now()) + ' 만듦)\n * 이 파일을 GitHub 저장소의 subjects 폴더에 올리면 모든 사용자의 앱에 반영돼요.\n * 앱의 진도 → 고친 내용 → 반영 파일 만들기로 다시 만들 수 있어요. 직접 고치지 않아도 돼요.\n */\nNSA.fix(' + JSON.stringify(X.id) + ', ' + JSON.stringify(fx, null, 1) + ');\n';
+    const ok = await shareText(X.id + '-fix.js', txt, 'text/javascript');
+    if (ok) toast('반영 파일을 만들었어요. GitHub의 subjects 폴더에 올리세요');
+  }
 });
 
 /* ───────── 그리기 ───────── */
@@ -2333,6 +2846,9 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   const t = e.target;
   if (t.matches && t.matches('input[type=file][data-pick]')) { const files = Array.from(t.files || []); const tg = t.dataset.pick; t.value = ''; if (files.length) { tick(); startEditor(files, tg); } return; }
+  if (t.id === 'fx-file' && t.files && t.files[0]) {
+    const rd = new FileReader(); rd.onload = () => { R.t.fxRaw = String(rd.result || ''); ACT.fxload(); }; rd.readAsText(t.files[0]); return;
+  }
   if (t.id === 'bk-file' && t.files && t.files[0]) {
     const rd = new FileReader();
     rd.onload = () => { const txt = String(rd.result || ''); R.t.bkRaw = txt; const ta = $('#bk-in'); if (ta) ta.value = txt.length < 200000 ? txt : '(큰 백업 파일을 읽었어요)'; ACT.bkload(); };
@@ -2367,14 +2883,22 @@ async function boot(){
   appEl.innerHTML = '<p class="empty">불러오는 중…</p>';
   const list = window.NSA_LIST;
   if (!list) { appEl.innerHTML = '<div class="notice" style="margin-top:24px"><b>과목 목록(subjects/list.js)을 불러오지 못했어요</b><p>index.html 옆에 subjects 폴더가 있는지 확인해 주세요.</p></div>'; return; }
-  for (const it of list) for (const f of (it.files || [])) { try { await loadScript(f); } catch (e) { LOADERR.push(f); } }
-  const reg = (window.NSA && window.NSA.subjects) || {};
-  list.forEach(it => { const d = reg[it.id]; if (d && d.units && d.units.length) { try { SUB[it.id] = buildSubject(d); } catch (e) { LOADERR.push(it.id); } } });
-  ORDER = list.map(i => i.id).filter(id => SUB[id]);
-  list.forEach(it => { if (!SUB[it.id] && !LOADERR.includes(it.id)) LOADERR.push((it.title || it.id) + ' 과목 파일 (형식 오류가 있는지 확인)'); });
+  ORDER = list.filter(it => it && it.id).map(it => it.id);
   await idbOpen(); try { await imgLoadMeta(); } catch (e) {}
   Object.keys(S.subj).forEach(k => { const z = S.subj[k].qz; if (z && z.t0) z.t0 = null; });
-  applySettings(); restoreRoute(); render(true);
+  applySettings(); await restoreRouteAsync(); render(true);
+  prefetchSums();
+}
+/* 마지막에 있던 화면의 과목만 먼저 불러와요 */
+async function restoreRouteAsync(){ const r = S.route; if (r && r.sid && ORDER.includes(r.sid)) await ensureSubject(r.sid); restoreRoute(); }
+/* 첫 화면 요약이 없는 과목은 뒤에서 조용히 한 번 불러와 둬요 */
+async function prefetchSums(){
+  const hide = S.set.hideSubj || {};
+  for (const id of ORDER) {
+    if (SUB[id] || S.sums[id] || hide[id]) continue;
+    await ensureSubject(id);
+    if (!R.sid) render();
+  }
 }
 /* 폰에 앱으로 설치할 때만 */
 (function(){
@@ -2384,6 +2908,6 @@ async function boot(){
   const ic = document.createElement('link'); ic.rel = 'apple-touch-icon'; ic.href = 'icon-192.png'; document.head.appendChild(ic);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
-window.__CJ = { S: () => S, G: () => G, R, ACT, SUB, X: () => X, IMG, render, gParse, gAnswers, gSplit, gCleanLines, autoLink, paginate, subjStats, reviewPool, Q, save };
+window.__CJ = { S: () => S, G: () => G, R, ACT, SUB, X: () => X, IMG, render, gParse, gAnswers, gSplit, gCleanLines, autoLink, paginate, subjStats, reviewPool, Q, save, ensureSubject, applyLocal, allQ, CS, buildFix, nextNew, dueList, LOADERR };
 boot();
 })();
