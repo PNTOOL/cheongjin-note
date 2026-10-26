@@ -29,6 +29,16 @@ window.NSA_LIST = [
       'subjects/health-assessment-q3.js',
       'subjects/health-assessment-q4.js'
     ]
+  },
+  {
+    id: 'medical-terminology',
+    title: '의학용어',
+    term: '1-2',
+    kind: '전공선택',
+    files: [
+      'subjects/medical-terminology.js',
+      'subjects/medical-terminology-2.js'
+    ]
   }
 ];
 
@@ -45,5 +55,11 @@ window.NSA = window.NSA || {
     var s = this.subjects[id] || (this.subjects[id] = { id: id, units: [], extraQs: [], pending: true });
     if (part && part.qs) s.extraQs = s.extraQs.concat(part.qs);
   },
-  fix: function (id, patch) { this.fixes[id] = patch; }
+  fix: function (id, patch) { this.fixes[id] = patch; },
+  /* 과목 내용을 여러 파일로 나눌 때: 앞 파일의 과목에 장(units)과 표·쌍 등을 이어 붙여요 */
+  more: function (id, part) {
+    var s = this.subjects[id]; if (!s || !part) return;
+    (part.units || []).forEach(function (u) { s.units.push(u); });
+    ['pairs', 'tables', 'orders', 'numbers'].forEach(function (k) { if (part[k]) s[k] = (s[k] || []).concat(part[k]); });
+  }
 };

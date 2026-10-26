@@ -40,7 +40,7 @@ function nospace(s){ return String(s || '').replace(/\s+/g, ''); }
 function freshSubj(){
   return { c: {}, q: {}, cw: {}, edits: {}, mine: {}, flags: {}, ill: {}, tbl: {}, ord: {}, exams: [], custom: [],
     mnr: {}, figTodo: {}, figAsked: {}, figp: {}, known: null, snap: {}, d: {}, ses: null, qz: null, scope: null, lastUse: 0,
-    mode: 'all', noAdd: false, cramAt: 0, qe: {}, qh: {}, myc: [] };
+    mode: 'all', noAdd: false, cramAt: 0, qe: {}, qh: {}, myc: [], wra: {}, qtypes: null, qb: null };
 }
 function fresh(){
   return { v: 2, cur: null, route: null,
@@ -106,14 +106,15 @@ function patchDef(def, fx){
   Object.keys(fx.concepts || {}).forEach(id => { if (cm[id]) Object.assign(cm[id], fx.concepts[id]); });
 }
 function buildSubject(def, fx){
+  if (def.kind === 'terms') expandTerms(def);
   patchDef(def, fx);
   const af = +def.addFrom || 3; /* 이 차수부터 '추가' 표시 */
   const isNew = o => (+o.v || 0) >= af;
-  const x = { id: def.id, title: def.title || def.id, def, fix: fx || null, version: def.version || 1, units: def.units || [], concepts: [], cmap: {}, umap: {}, qs: [], qmap: {},
+  const x = { id: def.id, title: def.title || def.id, def, kind: def.kind || 'concepts', fix: fx || null, version: def.version || 1, units: def.units || [], concepts: [], cmap: {}, umap: {}, qs: [], qmap: {},
     tables: def.tables || [], orders: def.orders || [], pairs: def.pairs || [], numbers: def.numbers || [] };
   x.units.forEach((u, ui) => {
     u.n = ui + 1; x.umap[u.id] = u; u.concepts = u.concepts || [];
-    u.concepts.forEach((c, ci) => { c.u = u.id; c.n = ci + 1; c.sum = c.sum || []; c.mn = c.mn || []; c.cards = c.cards || []; c.pr = clampPr(c.pr || (c.imp ? 3 : 2)); c.add = isNew(c) || !!c.fixAdd; x.concepts.push(c); x.cmap[c.id] = c; });
+    u.concepts.forEach((c, ci) => { c.u = u.id; c.n = ci + 1; c.sum = c.sum || []; c.mn = c.mn || []; c.cards = c.cards || []; c.pr = clampPr(c.pr || (c.imp ? 3 : 2)); c.add = isNew(c) || !!c.fixAdd; if (c.tk) termDerive(c); x.concepts.push(c); x.cmap[c.id] = c; });
   });
   x.tables.concat(x.orders, x.pairs).forEach(t => { t.add = isNew(t); });
   x.numbers.forEach(n => { n.add = !!n.v3 || (+n.ver || 0) >= af; });
@@ -135,6 +136,7 @@ function buildSubject(def, fx){
   };
   x.units.forEach(u => (u.qs || []).forEach(q => addMC(q, u.id)));
   (def.extraQs || []).forEach(q => addMC(q, q.u));
+  if (x.kind === 'terms') { termIndex(x); genTermQs(x).forEach(q => { if (!x.qmap[q.id]) { x.qs.push(q); x.qmap[q.id] = q; } }); }
   if (fx) {
     Object.keys(fx.qs || {}).forEach(id => { if (x.qmap[id]) Object.assign(x.qmap[id], fx.qs[id]); });
     const hid = new Set(fx.hide || []); if (hid.size) x.qs = x.qs.filter(q => !hid.has(q.id)); /* 뺀 문제: 목록에서만 빼요 */
@@ -143,6 +145,104 @@ function buildSubject(def, fx){
   return x;
 }
 function isAdd(o){ return !!(o && o.add); }
+
+/* ───────── 단어장 과목 (의학용어 등): 조각 · 단어 · 약어 ───────── */
+const TK_LABEL = { part: '조각', word: '단어', abbr: '약어' };
+const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'x';
+const partId = f => 'p' + (/^-/.test(f) ? 's' : /-$/.test(f) ? 'p' : 'r') + '_' + slug(f);
+const partKind = f => /^-/.test(f) ? '접미사' : /-$/.test(f) ? '접두사' : '어근';
+const koMain = s => String(s || '').split('·')[0].trim();
+const normEn = s => String(s || '').toLowerCase().replace(/[\s\-\/\.'’,()]/g, '');
+const normKo = s => String(s || '').replace(/\([^)]*\)/g, '').replace(/[\s·,.\-~()]/g, '');
+function josa(w, a, b){ const ch = String(w || '').trim().slice(-1); const c = ch.charCodeAt(0); if (c >= 0xAC00 && c <= 0xD7A3) return (c - 0xAC00) % 28 ? a : b; return a + '(' + b + ')'; }
+function mnParse(s){ if (!s) return []; return String(s).split('\n').filter(Boolean).map(z => { const i = z.indexOf(' | '); return i >= 0 ? { k: z.slice(0, i).trim(), s: z.slice(i + 3).trim() } : { k: '', s: z.trim() }; }); }
+function expandTerms(def){
+  if (def._exp) return; def._exp = true;
+  (def.units || []).forEach(u => {
+    const cs = u.concepts = u.concepts || [];
+    (u.parts || []).forEach(p => cs.push({ id: partId(p[0]), tk: 'part', en: p[0], ko: p[1], pr: p[2] || 2, mn: mnParse(p[3]), note: p[4] || '', v: p[5] }));
+    (u.words || []).forEach(w => cs.push({ id: 'w_' + slug(w[0]), tk: 'word', en: w[0], ko: w[1], parts: w[2] || '', pr: w[3] || 2, mean: w[4] || '', mn: mnParse(w[5]), note: w[6] || '', v: w[7] }));
+    (u.abbr || []).forEach(a => cs.push({ id: 'a_' + slug(a[0]), tk: 'abbr', en: a[0], full: a[1] || '', ko: a[2], pr: a[3] || 2, mn: mnParse(a[4]), note: a[5] || '', v: a[6] }));
+  });
+}
+function termDerive(c){
+  c.t = c.en; c.kw = [c.en].concat(String(c.ko || '').split('·').map(z => z.trim()).filter(Boolean));
+  c.sum = [koMain(c.ko) + (c.full ? ' (' + c.full + ')' : '') + (c.parts ? ' · ' + c.parts.split('+').join(' + ') : '')];
+  c.ex = c.ex || c.mean || ''; c.cards = []; c.ox = [];
+}
+function termIndex(x){
+  x.pmap = {}; x.fam = {};
+  x.concepts.forEach(c => { if (c.tk === 'part') x.pmap[c.en] = c; });
+  x.concepts.forEach(c => { if (c.tk === 'word' && c.parts) c.parts.split('+').map(f => f.trim()).forEach(f => { (x.fam[f] = x.fam[f] || []).push(c.id); }); });
+}
+function termParts(c, xo){
+  const x = xo && xo.pmap ? xo : SUB[xo || (X && X.id)]; if (!c.parts || !x || !x.pmap) return [];
+  return c.parts.split('+').map(f => f.trim()).filter(Boolean).map(f => { const p = x.pmap[f]; const v = p ? cOf(x.id, p.id) : null; return { f, id: p ? p.id : null, m: v ? koMain(v.ko) : '' }; });
+}
+function seeded(s){ let h = hash(s) >>> 0; return () => { h = (h + 0x6D2B79F5) >>> 0; let t = h; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function rshuffle(a, rnd){ a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function lev(a, b){
+  const m = a.length, n = b.length; if (!m) return n; if (!n) return m;
+  let p = []; for (let j = 0; j <= n; j++) p[j] = j;
+  for (let i = 1; i <= m; i++) { const q = [i]; for (let j = 1; j <= n; j++) q[j] = Math.min(p[j] + 1, q[j - 1] + 1, p[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); p = q; }
+  return p[n];
+}
+/* 문제 자동 생성: 뜻 고르기 · 단어 고르기 · 철자 쓰기 · 뜻 쓰기 */
+function genTermQs(x){
+  const out = []; const items = x.concepts.filter(c => c.tk);
+  const V = c => { const v = cOf(x.id, c.id) || c; return { t: c.t, ko: v.ko, mean: v.mean, full: v.full }; };
+  const byTk = {}; items.forEach(c => { (byTk[c.tk] = byTk[c.tk] || []).push(c); });
+  const famOf = c => { const s = new Set(); if (c.parts) c.parts.split('+').forEach(f => (x.fam[f.trim()] || []).forEach(id => s.add(id))); return s; };
+  items.forEach(c => {
+    const v = V(c), rnd = seeded(c.id), ko = koMain(v.ko), pool = (byTk[c.tk] || []).filter(o => o.id !== c.id);
+    const fam = famOf(c);
+    const pick = (field, near) => {
+      const val = o => field === 'ko' ? koMain(V(o).ko) : o.t; const seen = new Set([field === 'ko' ? normKo(ko) : normEn(c.t)]);
+      const rank = o => (near && fam.has(o.id) ? 0 : 1) + (o.u === c.u ? 0 : 2);
+      const cand = rshuffle(pool, rnd).sort((a, b) => rank(a) - rank(b)); const res = [];
+      for (const o of cand) { const z = val(o); const k = field === 'ko' ? normKo(z) : normEn(z); if (!z || seen.has(k)) continue; seen.add(k); res.push(z); if (res.length >= 4) break; }
+      return res;
+    };
+    const parts = termParts(c, x);
+    const how = parts.length ? c.t + ' = ' + parts.map(p => p.f + (p.m ? '(' + p.m + ')' : '')).join(' + ') + ' → ' + ko : '';
+    const e = [how, c.tk === 'abbr' && v.full ? c.t + ' = ' + v.full + ' → ' + ko : '', v.mean && v.mean !== ko ? v.mean : '', c.tk === 'part' ? partKind(c.en) + ' · ' + ko : ''].filter(Boolean).join(' · ');
+    const base = { c: [c.id], u: c.u, gen: true, lv: 1, mine: !!c.mine, add: !!c.add, e, k: c.tk === 'abbr' && v.full ? v.full : '' };
+    const sameKo = (pool.filter(o => normKo(koMain(V(o).ko)) === normKo(ko)).map(o => o.t));
+    const spellAcc = [c.t].concat(c.tk === 'part' ? [c.t.replace(/^-|-$/g, ''), c.t.replace(/^-|-$/g, '').split('/')[0]] : [], sameKo);
+    const meanAcc = String(v.ko || '').split('·').map(z => z.trim()).filter(Boolean);
+    const lab = { part: '조각', word: '단어', abbr: '약어' }[c.tk];
+    const o1 = pick('ko', false);
+    if (o1.length >= 2) out.push(Object.assign({ id: c.id + '-m', type: 'mc', qt: 'mcm', tag: '뜻 고르기', q: '‘' + c.t + '’의 뜻은?', o: [ko].concat(o1), a: 0 }, base));
+    if (c.tk === 'word') { const o2 = pick('t', true); if (o2.length >= 2) out.push(Object.assign({ id: c.id + '-t', type: 'mc', qt: 'mct', tag: '단어 고르기', q: '‘' + ko + '’' + josa(ko, '을', '를') + ' 영어로 하면?', o: [c.t].concat(o2), a: 0 }, base)); }
+    out.push(Object.assign({ id: c.id + '-s', type: 'wr', wm: 'spell', qt: 'spell', tag: lab + ' 쓰기', qp: c.tk === 'word' ? '영어로 쓰세요' : '이 뜻의 ' + lab + josa(lab, '을', '를') + ' 쓰세요', q: c.tk === 'word' ? '‘' + ko + '’' + josa(ko, '을', '를') + ' 영어로 쓰세요' : '‘' + ko + '’' + josa(ko, '을', '를') + ' 뜻하는 ' + lab + josa(lab, '을', '를') + ' 쓰세요', big: ko, sub: c.tk === 'word' && v.mean && v.mean !== ko ? v.mean : '', o: [c.t], a: 0, acc: spellAcc, hp: parts.map(p => p.f).join(' + ') }, base));
+    out.push(Object.assign({ id: c.id + '-w', type: 'wr', wm: 'mean', qt: 'mean', tag: '뜻 쓰기', qp: '뜻을 한글로 쓰세요', q: '‘' + c.t + '’의 뜻을 한글로 쓰세요', big: c.t, o: [ko], a: 0, acc: meanAcc, hp: parts.map(p => p.m).filter(Boolean).join(' + ') }, base));
+  });
+  return out;
+}
+function regenTermQs(x){
+  if (x.kind !== 'terms') return;
+  termIndex(x);
+  genTermQs(x).forEach(q => { const o = x.qmap[q.id]; if (o && !o.mine) { Object.keys(q).forEach(k => { if (!(x.qbase && x.qbase[q.id])) o[k] = q[k]; }); } else if (!o) { x.qs.push(q); x.qmap[q.id] = q; } });
+}
+function gradeWr(q, inp){
+  const accs = (q.acc || [q.o[0]]).concat(((SS().wra || {})[q.id]) || []);
+  if (q.wm === 'spell') {
+    const a = normEn(inp); if (!a) return { ok: false };
+    if (accs.some(z => normEn(z) === a)) return { ok: true };
+    const d = Math.min.apply(null, accs.map(z => lev(normEn(z), a)));
+    return { ok: false, near: d === 1 && a.length >= 4 };
+  }
+  const a = normKo(inp); if (!a) return { ok: false };
+  return { ok: accs.some(z => { const b = normKo(z); return b && (b === a || (b.length >= 2 && a.indexOf(b) >= 0 && a.length - b.length <= 2) || (a.length >= 2 && b.indexOf(a) >= 0 && b.length - a.length <= 1)); }) };
+}
+const QT_LABEL = { spell: '철자 쓰기', mean: '뜻 쓰기', mc: '객관식' };
+function qtOf(q){ return q.qt ? (q.qt === 'mcm' || q.qt === 'mct' ? 'mc' : q.qt) : null; }
+function qtOn(k, sid){ const s = S.subj[sid || (X && X.id)]; const t = s && s.qtypes; return !t || t[k] !== false; }
+function quickQ(cid){
+  const order = ['-m', '-w', '-s', '-t'];
+  for (const sfx of order) { const q = X.qmap[cid + sfx]; if (q && qIn(q)) return q; }
+  return null;
+}
 
 /* ───────── 과목 불러오기: 그 과목에 들어갈 때만 ───────── */
 const LOADED = new Set(), LOADING = {};
@@ -178,7 +278,8 @@ function cleanLocal(x, s){
   Object.keys(s.edits || {}).forEach(id => {
     const b = x.cmap[id]; if (!b || b.mine) return; const e = s.edits[id]; const o = b.o0 || b;
     const eq = (e.ex == null || e.ex === b.ex) && (e.sum == null || same(e.sum, b.sum)) && (e.mn == null || same(mnKS(e.mn), mnKS(b.mn))) &&
-      (e.t == null || e.t === o.t) && (e.pr == null || +e.pr === o.pr) && (e.note == null || (e.note || '') === (b.note || ''));
+      (e.t == null || e.t === o.t) && (e.pr == null || +e.pr === o.pr) && (e.note == null || (e.note || '') === (b.note || '')) &&
+      (e.ko == null || e.ko === b.ko) && (e.mean == null || (e.mean || '') === (b.mean || '')) && (e.full == null || (e.full || '') === (b.full || ''));
     if (eq) delete s.edits[id];
   });
   Object.keys(s.qe || {}).forEach(id => { const b = (x.qbase && x.qbase[id]) || x.qmap[id]; if (!b) return; const e = s.qe[id]; if (Object.keys(e).every(k => same(e[k], b[k]))) delete s.qe[id]; });
@@ -197,6 +298,7 @@ function applyLocal(x){
   x.qs = x.qs.filter(q => !q.mine); Object.keys(x.qmap).forEach(k => { if (x.qmap[k].mine) delete x.qmap[k]; });
   (s.myc || []).forEach(m => {
     const u = x.umap[m.u]; if (!u || x.cmap[m.id]) return;
+    if (m.tk) { const c = { id: m.id, tk: m.tk, en: m.en || '?', ko: m.ko || '', full: m.full || '', mean: m.mean || '', parts: m.parts || '', pr: clampPr(m.pr), mn: m.mn || [], note: m.note || '', u: u.id, mine: true, add: false, ts: m.ts }; termDerive(c); u.concepts.push(c); x.cmap[c.id] = c; return; }
     const c = { id: m.id, t: m.t || '내 개념', pr: clampPr(m.pr), ex: m.ex || '', sum: m.sum || [], mn: m.mn || [], cards: [], kw: m.kw || [], ox: m.ox || [], note: m.note || '', u: u.id, mine: true, add: false, ts: m.ts };
     u.concepts.push(c); x.cmap[c.id] = c;
     c.ox.forEach((o, i) => { const q = { id: c.id + '-ox' + (i + 1), type: 'ox', q: o[0], o: ['O', 'X'], a: o[1] ? 0 : 1, e: o[2] || '', c: [c.id], u: c.u, lv: 1, mine: true }; x.qs.push(q); x.qmap[q.id] = q; });
@@ -204,6 +306,7 @@ function applyLocal(x){
   x.concepts = []; x.units.forEach(u => { u.concepts.forEach((c, i) => { c.n = i + 1; }); x.concepts.push.apply(x.concepts, u.concepts); });
   /* 개념 제목·중요도 */
   Object.keys(s.edits || {}).forEach(id => { const c = x.cmap[id], e = s.edits[id]; if (!c || c.mine || (e.t == null && e.pr == null)) return; c.o0 = { t: c.t, pr: c.pr }; if (e.t) c.t = e.t; if (e.pr) c.pr = clampPr(e.pr); });
+  if (x.kind === 'terms') { const X0 = X; X = x; try { regenTermQs(x); x.qs.forEach(q => { if (q.gen && q.c[0] && x.cmap[q.c[0]] && x.cmap[q.c[0]].mine) q.mine = true; }); } finally { X = X0; } }
   /* 문제 고치기 */
   Object.keys(s.qe || {}).forEach(id => { const b = x.qmap[id]; if (!b || b.mine) return; const y = Object.assign({}, b, s.qe[id], { edited: true }); x.qbase[id] = b; const i = x.qs.indexOf(b); if (i >= 0) x.qs[i] = y; x.qmap[id] = y; });
 }
@@ -221,11 +324,12 @@ function CS(){ return X.concepts.filter(inRange); }
 function UC(u){ return u.concepts.filter(inRange); }
 function addVisible(c){ return !(c.add && addOff()); }
 function scopeSet(){ const sc = scopeIds(); return sc ? new Set(sc) : null; }
-function qIn(q){
+function qInBase(q){
   if (q.gc || q.src === 'custom') return true;
   if (SS().qh[q.id]) return false; if (q.add && addOff()) return false;
   return links(q).every(id => { const c = X.cmap[id]; return !c || inRange(c); });
 }
+function qIn(q){ if (!qInBase(q)) return false; const t = qtOf(q); return !t || qtOn(t); } /* 평소 공부에 나오는 문제 유형 (단어장 과목) */
 /* 당일치기: 배운 직후 → 10분 → 1시간 → 3시간 → 다음 날 아침 */
 const CRAM = [10 * MIN, HOUR, 3 * HOUR], DONE = 9e15;
 function cramOn(){ return modeOf() === 'cram'; }
@@ -237,7 +341,7 @@ function SS(sid){ sid = sid || (X && X.id); return S.subj[sid] || (S.subj[sid] =
 function cOf(sid, cid){
   const x = SUB[sid]; if (!x) return null; const b = x.cmap[cid]; if (!b) return null;
   const e = S.subj[sid] && S.subj[sid].edits[cid];
-  return e ? Object.assign({}, b, { ex: e.ex != null ? e.ex : b.ex, sum: e.sum || b.sum, mn: e.mn || b.mn, note: e.note != null ? e.note : b.note, edited: true }) : b;
+  return e ? Object.assign({}, b, { ex: e.ex != null ? e.ex : b.ex, sum: e.sum || b.sum, mn: e.mn || b.mn, note: e.note != null ? e.note : b.note, ko: e.ko != null ? e.ko : b.ko, mean: e.mean != null ? e.mean : b.mean, full: e.full != null ? e.full : b.full, edited: true }) : b;
 }
 function C(id){ return cOf(X.id, id); }
 function mnList(c, sid){
@@ -580,7 +684,9 @@ function lrow(act, arg, title, meta, opt){
 const PR_LABEL = { 3: '자주 출제', 2: '중요', 1: '기본' };
 const ADD_TAG = '<span class="addc">추가</span>';
 const MINE_TAG = '<span class="addc mine">내 개념</span>';
-function cTags(c){ return (c.add ? ADD_TAG : '') + (c.mine ? MINE_TAG : '') + (SS().edits[c.id] && !c.mine ? '<span class="addc ed">고침</span>' : ''); }
+function cTags(c){ return (c.tk && c.tk !== 'word' ? '<span class="addc tk">' + TK_LABEL[c.tk] + '</span>' : '') + (c.add ? ADD_TAG : '') + (c.mine ? MINE_TAG : '') + (SS().edits[c.id] && !c.mine ? '<span class="addc ed">고침</span>' : ''); }
+function koTag(c){ return c.tk ? '<span class="t2">' + esc(koMain(C(c.id).ko)) + '</span>' : ''; }
+const NOUN = () => X && X.kind === 'terms' ? '항목' : '개념';
 function starsHTML(n){ n = n || 2; return '★'.repeat(n) + (n < 3 ? '<i>' + '★'.repeat(3 - n) + '</i>' : ''); }
 function prMark(c){ return '<span class="prs p' + c.pr + '" title="' + PR_LABEL[c.pr] + '" aria-label="중요도 별 ' + c.pr + '개, ' + PR_LABEL[c.pr] + '">' + starsHTML(c.pr) + '</span>'; }
 function prChip(c){ return '<span class="chip c-pr p' + c.pr + '">' + starsHTML(c.pr) + ' ' + PR_LABEL[c.pr] + '</span>'; }
@@ -614,12 +720,40 @@ function figStrip(c){
   const imgs = imgsOf(X.id, c.id); if (!imgs.length) return '';
   return '<div class="figstrip">' + imgs.map(m => '<button class="fthumb" data-act="go" data-arg="imgview:' + m.id + '" aria-label="내 그림 보기"><img src="' + m.thumb + '" alt="">' + ((m.marks || []).length ? '<i>' + m.marks.length + '</i>' : '') + '</button>').join('') + '</div>';
 }
+/* ───────── 단어장 항목 (조각 · 단어 · 약어) ───────── */
+function termFamily(c){
+  if (c.tk === 'part') return (X.fam[c.en] || []).filter(id => id !== c.id && X.cmap[id]).slice(0, 8);
+  const s = new Set(); termParts(c).forEach(p => (X.fam[p.f] || []).forEach(id => { if (id !== c.id && X.cmap[id]) s.add(id); }));
+  return Array.from(s).slice(0, 6);
+}
+function termPairs(c){ return (X.pairs || []).filter(p => (p.w || []).includes(c.en)); }
+function termHTML(c, o){
+  o = o || {};
+  const parts = termParts(c);
+  let h = '<div class="term">' + (o.noEn ? '' : '<div class="tm-en"><b lang="en">' + esc(c.t) + '</b><button class="tool" data-act="sayen" data-arg="' + c.id + '" aria-label="발음 듣기" title="발음 듣기">' + ICON.speak + '</button></div>') +
+    (c.full ? '<div class="tm-full" lang="en">' + esc(c.full) + '</div>' : '') +
+    '<div class="tm-ko">' + esc(String(c.ko || '').split('·').join(' · ')) + '</div>';
+  if (parts.length) h += '<div class="tm-parts">' + parts.map(p => '<button class="tm-p" data-act="csheet" data-arg="' + esc(X.id + '|' + (p.id || '')) + '"' + (p.id ? '' : ' disabled') + '><b lang="en">' + esc(p.f) + '</b><span>' + esc(p.m || '?') + '</span></button>').join('<i>+</i>') + '</div>';
+  if (c.tk === 'part') h += '<div class="tm-kind">' + partKind(c.en) + '</div>';
+  if (c.mean && c.mean !== koMain(c.ko)) h += '<p class="tm-mean">' + esc(c.mean) + '</p>';
+  h += '</div>';
+  if (o.compact) return h;
+  h += mnBlock(c, { learn: o.learn });
+  const fam = termFamily(c);
+  if (fam.length) h += '<div class="tm-fam"><span class="lab">' + (c.tk === 'part' ? '이 조각이 들어간 단어' : '같은 조각을 쓰는 단어') + '</span>' + fam.map(id => { const z = C(id); return '<button class="chip-btn" data-act="csheet" data-arg="' + esc(X.id + '|' + id) + '"><b lang="en">' + esc(z.t) + '</b> ' + esc(koMain(z.ko)) + '</button>'; }).join('') + '</div>';
+  termPairs(c).forEach(p => { h += '<div class="tm-pair"><span class="lab">헷갈리는 쌍 · ' + esc(p.t) + '</span><p>' + esc(p.a) + '</p><p>' + esc(p.b) + '</p></div>'; });
+  if (c.note) h += '<p class="c-note">' + esc(c.note) + '</p>';
+  return h;
+}
 function conceptHTML(c, lv, o){
   o = o || {};
   const u = X.umap[c.u], st = status(c.id), s = SS();
   const seg = o.inSession ? '' : '<div class="lvseg" role="tablist" aria-label="보기 단계">' + LV_LABEL.map((t, i) => '<button role="tab" aria-selected="' + (i === lv) + '" data-act="lv" data-arg="' + c.id + ':' + i + '">' + t + '</button>').join('') + '</div>';
   let body;
-  if (lv === 0) {
+  if (c.tk) {
+    body = lv === 0 ? termHTML(c, { learn: o.learn, noEn: true }) : lv === 1 ? termHTML(c, { compact: true, noEn: true }) + (c.note && c.edited ? '<p class="c-note">' + esc(c.note) + '</p>' : '') : lv === 2 ? termHTML(c, { compact: true, noEn: true }) + memoHTML(mnList(c), true)
+      : R.t.peek === c.id ? termHTML(c, { compact: true, noEn: true }) + memoHTML(mnList(c)) : '<button class="recall" data-act="peek" data-arg="' + c.id + '"><span lang="en">' + esc(c.t) + '</span><em>뜻과 조각을 먼저 떠올려 보세요. 떠올린 다음 탭해서 확인</em></button>';
+  } else if (lv === 0) {
     body = '<div class="ex">' + paras(c.ex) + '</div>' +
       (c.why ? '<details class="why"><summary>왜 그럴까?</summary><p>' + esc(c.why) + '</p></details>' : '') +
       mnBlock(c, { learn: o.learn }) + (c.note ? '<p class="c-note">' + esc(c.note) + '</p>' : '');
@@ -631,7 +765,7 @@ function conceptHTML(c, lv, o){
   const hint = o.inSession ? '' : (lv === 0 ? '본문을 탭하면 요약만 보여요' : lv === 1 ? '본문을 탭하면 다시 설명이 보여요' : '');
   return '<article class="concept paper">' +
     '<header class="c-head"><div class="c-eyebrow mono">' + u.n + '-' + c.n + ' · ' + esc(u.title) + '</div>' +
-    '<h2 class="c-title">' + esc(c.t) + '</h2>' +
+    '<h2 class="c-title"' + (c.tk ? ' lang="en"' : '') + '>' + esc(c.t) + '</h2>' +
     '<div class="c-chips"><span class="chip st-' + st + '">' + ST_LABEL[st] + '</span>' + prChip(c) + (isAdd(c) ? '<span class="chip c-add">추가</span>' : '') + (c.mine ? '<span class="chip c-mine">내가 추가</span>' : '') + (c.edited || (SS().edits[c.id] && !c.mine) ? '<span class="chip c-edit">내가 수정함</span>' : '') + (!inRange(c) ? '<span class="chip c-out">' + MODES[modeOf()].name + ' 범위 밖</span>' : '') + (s.flags[c.id] ? '<span class="chip c-flag">확인 필요</span>' : '') + '</div>' +
     '<div class="c-tools"><button class="tool" data-act="speak" data-arg="' + c.id + ':' + lv + '" aria-label="읽어주기" title="읽어주기">' + ICON.speak + '</button>' +
     '<button class="tool" data-act="go" data-arg="edit:' + c.id + '" aria-label="내용 수정" title="수정">' + ICON.edit + '</button>' +
@@ -658,8 +792,49 @@ function needHTML(l){
   const m = mnList(c, l[0])[0];
   return '<div class="need-c"><b>' + esc(c.t) + (l[0] !== (X && X.id) ? ' <small>' + esc(SUB[l[0]].title) + '</small>' : '') + '</b>' + sumHTML(c) + (m ? memoHTML([m], false, { map: false }) : '') + '</div>';
 }
+function diffHTML(inp, ans){
+  const a = normEn(inp), b = normEn(ans); const m = a.length, n = b.length;
+  const d = []; for (let i = 0; i <= m; i++) { d[i] = [i]; } for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  const out = []; let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && d[i][j] === d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)) { out.unshift(a[i - 1] === b[j - 1] ? esc(a[i - 1]) : '<i class="d-x">' + esc(a[i - 1]) + '</i>'); i--; j--; }
+    else if (i > 0 && d[i][j] === d[i - 1][j] + 1) { out.unshift('<i class="d-x d-extra">' + esc(a[i - 1]) + '</i>'); i--; }
+    else { out.unshift('<i class="d-m">_</i>'); j--; }
+  }
+  return '<span class="diff" lang="en">' + out.join('') + '</span>';
+}
+function wrHTML(q, st, ns){
+  const shown = !!st.shown && ns !== 'mk'; const en = q.wm === 'spell';
+  let h = '<article class="qcard">' + qHead(q) + '<p class="qtext">' + esc(q.big ? (q.qp || q.q) : q.q) + '</p>' + (q.big ? '<div class="qbig"' + (en ? '' : ' lang="en"') + '>' + esc(q.big) + '</div>' : '') + (q.sub && en ? '<p class="qsub">' + esc(q.sub) + '</p>' : '');
+  if (!shown && ns !== 'rv') {
+    h += '<div class="wr"><input id="wr-in" data-ns="' + ns + '" value="' + esc(st.inp || '') + '" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done"' + (en ? ' lang="en"' : ' lang="ko"') + ' placeholder="' + (en ? '영어로 쓰기' : '한글로 쓰기') + '" aria-label="답 쓰기">' + (ns === 'mk' ? '' : '<button class="btn primary" data-act="wrok" data-arg="' + ns + '">확인</button>') + '</div>';
+    if (st.near) h += '<div class="fb near"><b>한 글자 차이예요. 고쳐서 다시 확인해 보세요</b>' + diffHTML(st.near, q.o[0]) + '</div>';
+    if (ns !== 'mk') {
+      const hl = st.hl || 0, ans = q.o[0];
+      const hs = [];
+      if (hl >= 1) hs.push('첫 글자 <b' + (en ? ' lang="en"' : '') + '>' + esc(en ? normEn(ans)[0] || '' : ans[0] || '') + '</b>');
+      if (hl >= 2 && q.hp) hs.push((en ? '조각 ' : '조각 뜻 ') + '<b>' + esc(q.hp) + '</b>');
+      if (hl >= 3) hs.push((en ? normEn(ans).length : normKo(ans).length) + '글자');
+      h += '<div class="wr-h">' + hs.map(z => '<span>' + z + '</span>').join('') + (hl < (q.hp ? 3 : 2) + (q.hp ? 0 : 1) ? '<button class="chip-btn" data-act="wrhint" data-arg="' + ns + '">힌트</button>' : '') + '<button class="chip-btn" data-act="wrgive" data-arg="' + ns + '">모르겠어요</button></div>';
+    }
+  }
+  if (shown || ns === 'rv') {
+    const ok = !!st.ok;
+    h += '<div class="fb ' + (ok ? 'ok' : 'ng') + '"><b>' + (ok ? (st.hint ? '맞았어요 · 힌트를 봐서 한 번 더 나와요' : '맞았어요') : (st.inp ? '틀렸어요 · 다음에 다시 나와요' : (ns === 'rv' ? '정답' : '모르는 문제 · 다음에 다시 나와요'))) + '</b>' +
+      (st.inp ? '<span>내 답 ' + (en && !ok && lev(normEn(st.inp), normEn(q.o[0])) <= Math.max(2, Math.floor(normEn(q.o[0]).length / 3)) ? diffHTML(st.inp, q.o[0]) : '<b>' + esc(st.inp) + '</b>') + '</span>' : '') + '<span>정답 <b' + (en ? ' lang="en"' : '') + '>' + esc(q.o[0]) + '</b></span></div>';
+    if (!ok && st.inp && ns !== 'rv' && ns !== 'mk' && !en) h += '<div class="row-btns"><button class="btn ghost sm" data-act="wrfix" data-arg="' + ns + '">내 답도 맞아요</button></div>';
+    if (ns !== 'rv' && ns !== 'mk') {
+      if (ok && !st.hint) h += '<div class="reasons conf"><span>얼마나 확실했나요?</span><button class="chip-btn' + (st.conf === 'sure' ? ' on' : '') + '" data-act="conf" data-arg="' + ns + ':sure">확실해요</button><button class="chip-btn' + (st.conf === 'unsure' ? ' on' : '') + '" data-act="conf" data-arg="' + ns + ':unsure">애매했어요</button></div>';
+      else if (!ok && st.inp) h += '<div class="reasons"><span>틀린 이유</span>' + ['몰랐음', '헷갈림', '철자 실수', '다른 단어와 혼동'].map(r => '<button class="chip-btn' + (st.reason === r ? ' on' : '') + '" data-act="reason" data-arg="' + ns + ':' + r + '">' + r + '</button>').join('') + '</div>';
+    }
+    h += explainHTML(q, [0]);
+  }
+  return h + '</article>';
+}
 function qHTML(q, st, ns){
   st = st || {};
+  if (q.type === 'wr') return wrHTML(q, st, ns);
   const isOX = q.type === 'ox'; const perm = st.perm || q.o.map((_, i) => i);
   const shown = !!st.shown && ns !== 'mk';
   const cls = oi => shown ? (oi === q.a ? 'right' : (oi === st.pick ? 'wrong' : '')) : (st.pick === oi ? 'picked' : '');
@@ -703,7 +878,7 @@ function explainHTML(q, perm){
       '<p class="hint">‘해설 질문 복사’를 누르고 Claude에 붙여넣으면 자세한 해설을 받을 수 있어요.</p>';
   }
   if (lk.length) h += '<div class="rel-c"><span>관련 개념</span>' + lk.map(l => { const c = cOf(l[0], l[1]); return c ? '<button class="chip-btn" data-act="csheet" data-arg="' + esc(l[0] + '|' + l[1]) + '">' + esc(c.t) + '</button>' : ''; }).join('') + '</div>';
-  if (!q.gc && q.src !== 'custom' && !q.mine && X && X.qmap[q.id]) h += '<div class="qfix"><button class="btn ghost sm" data-act="go" data-arg="qedit:' + q.id + '">' + ICON.edit + (q.edited ? '내가 고친 문제 · 다시 고치기' : '문제가 이상해요? 고치기 · 빼기') + '</button></div>';
+  if (!q.gc && !q.gen && q.src !== 'custom' && !q.mine && X && X.qmap[q.id]) h += '<div class="qfix"><button class="btn ghost sm" data-act="go" data-arg="qedit:' + q.id + '">' + ICON.edit + (q.edited ? '내가 고친 문제 · 다시 고치기' : '문제가 이상해요? 고치기 · 빼기') + '</button></div>';
   return h + '</section>';
 }
 
@@ -734,7 +909,7 @@ function backupMeta(){ return S.lastBackup ? '마지막 백업 ' + new Date(S.la
 function termLabel(k){ const m = /^(\d)\s*-\s*(\d)$/.exec(k || ''); return m ? m[1] + '학년 ' + m[2] + '학기' : (k || '과목'); }
 /* 첫 화면 요약: 불러온 과목은 새로 계산, 아직 안 불러온 과목은 지난번 값 */
 function subjSum(sid){
-  if (SUB[sid]) { const st = statsFor(sid); S.sums[sid] = { T: st.T, L: st.L, prog: st.prog, knownP: st.knownP, acc: st.acc, allT: st.allT, allProg: st.allProg, nAdd: st.nAdd, units: SUB[sid].units.length }; }
+  if (SUB[sid]) { const st = statsFor(sid); S.sums[sid] = { T: st.T, L: st.L, prog: st.prog, knownP: st.knownP, acc: st.acc, allT: st.allT, allProg: st.allProg, nAdd: st.nAdd, units: SUB[sid].units.length, kind: SUB[sid].kind }; }
   return S.sums[sid] || null;
 }
 function modeSeg(sid, m){
@@ -747,7 +922,7 @@ function addSeg(sid){
 function subjCard(it){
   const sid = it.id, sm = subjSum(sid), s = S.subj[sid], ses = s && s.ses, m = modeOf(sid);
   const title = (SUB[sid] && SUB[sid].title) || it.title || sid;
-  const meta = [it.kind || ''].concat(sm ? [sm.units + '단원', '개념 ' + sm.allT + '개'] : ['처음 들어갈 때 내용을 내려받아요']).filter(Boolean).join(' · ');
+  const meta = [it.kind || ''].concat(sm ? [sm.units + (sm.kind === 'terms' ? '장' : '단원'), (sm.kind === 'terms' ? '조각·단어·약어 ' : '개념 ') + sm.allT + '개'] : ['처음 들어갈 때 내용을 내려받아요']).filter(Boolean).join(' · ');
   const rl = m === 'all' ? '진도' : MODES[m].range + ' 진도';
   return '<article class="subj-card"><button class="subj-main" data-act="enter" data-arg="' + sid + '">' +
     '<span class="subj-t">' + esc(title) + (m !== 'all' ? '<span class="chip c-mode m-' + m + '">' + MODES[m].name + '</span>' : '') + '</span><span class="subj-m">' + esc(meta) + '</span>' +
@@ -784,7 +959,10 @@ function vSubjects(){
 }
 
 /* ───────── 공부 탭 ───────── */
-function newCount(due){ return cramOn() ? (due > 8 ? 2 : 4) : (due > 6 ? 1 : due > 2 ? 2 : 3); }
+function newCount(due){
+  if (X.kind === 'terms') return cramOn() ? (due > 10 ? 3 : 6) : (due > 12 ? 2 : due > 6 ? 3 : 5); /* 단어는 작아서 한 번에 더 많이 */
+  return cramOn() ? (due > 8 ? 2 : 4) : (due > 6 ? 1 : due > 2 ? 2 : 3);
+}
 function chunkPreview(){
   const now = Date.now(); const due = dueList(now).length; const rev = Math.min(due, cramOn() ? 5 : 6);
   const left = nextNew(9999).length;
@@ -804,6 +982,23 @@ function cramBox(st){
     '<p class="cb-t">' + esc(tx) + '</p>' +
     '<div class="row-btns"><button class="btn sm" data-act="rangenote">★★★ 요약지 보기</button><button class="btn sm" data-act="quiz" data-arg="range:">★★★ 문제 테스트</button></div></div>';
 }
+/* 장별 학습: 과목에 들어가면 바로 장마다 학습률·정답률이 보이고, 원하는 장만 공부 */
+function chapterList(){
+  const m = modeOf();
+  const items = X.units.map(u => {
+    const us = unitStats(u); const cs = UC(u);
+    const K = cs.filter(c => { const st = status(c.id); return st === 'known' || st === 'master'; }).length;
+    const done = us.n > 0 && us.L === us.n; const any = us.n || u.concepts.some(addVisible);
+    const acc = us.acc == null ? null : us.acc;
+    return '<div class="ch' + (done ? ' done' : '') + '"><button class="ch-main" data-act="chopen" data-arg="' + u.id + '" aria-label="' + esc(u.title) + ' 개념별로 보기">' +
+      '<span class="ch-h"><span class="ch-n mono">' + u.n + '</span><b>' + esc(u.title) + '</b>' + (done ? '<span class="chip st-known">다 배움</span>' : '') + '</span>' +
+      '<span class="ch-s">' + (us.n ? (m !== 'all' ? MODES[m].range + ' ' : '') + NOUN() + ' ' + us.n + '개 · 배움 ' + us.L + ' · 외움 ' + K + (us.att ? ' · 푼 문제 ' + us.att : '') : MODES[m].name + ' 범위의 개념이 없는 장이에요') + '</span>' +
+      '<span class="urow-b"><span class="lab">학습</span><span class="ub2"><i style="width:' + us.prog + '%"></i></span><b class="mono">' + us.prog + '%</b>' +
+      '<span class="lab">정답률</span><span class="ub2 acc"><i class="' + (acc != null && acc < 40 ? 'low' : '') + '" style="width:' + (acc || 0) + '%"></i></span><b class="mono">' + (acc == null ? '–' : acc + '%') + '</b></span></button>' +
+      '<button class="btn sm ch-go" data-act="chstudy" data-arg="' + u.id + '"' + (any ? '' : ' disabled') + '>' + (done ? '이 장 복습' : us.L ? '이 장 이어서' : '이 장 공부') + '</button></div>';
+  });
+  return '<h3 class="h3 ch-title">장별 학습 <span>장을 누르면 ' + NOUN() + '별로 보여요 · 원하는 장만 골라 공부해요</span></h3><div class="chs">' + items.join('') + '</div>';
+}
 function modeBox(st){
   const m = modeOf(), sid = X.id;
   let h = '<div class="mode-box"><div class="so-row"><span class="lab">공부 모드</span>' + modeSeg(sid, m) + '</div>' +
@@ -822,7 +1017,7 @@ function heroHTML(st){
   const d = st.delta;
   const dTxt = d == null ? (st.att ? '푼 문제 ' + st.att + '개 기준' : '문제를 풀면 나와요') : (d === 0 ? '지난주와 같아요' : '지난주보다 <b class="' + (d > 0 ? 'up' : 'dn') + '">' + (d > 0 ? '+' : '') + d + '%p</b>');
   return '<div class="hero"><div class="hero-row">' +
-    '<div class="hero-big"><span class="lab">' + (st.mode && st.mode !== 'all' ? MODES[st.mode].range + ' 진도' : '전체 진도') + '</span><b class="mono">' + st.prog + '<small>%</small></b><span class="meta">배운 개념 ' + st.L + ' / ' + st.T + (st.mode && st.mode !== 'all' ? ' · 전체 ' + st.allProg + '%' : '') + '</span></div>' +
+    '<div class="hero-big"><span class="lab">' + (st.mode && st.mode !== 'all' ? MODES[st.mode].range + ' 진도' : '전체 진도') + '</span><b class="mono">' + st.prog + '<small>%</small></b><span class="meta">배운 ' + NOUN() + ' ' + st.L + ' / ' + st.T + (st.mode && st.mode !== 'all' ? ' · 전체 ' + st.allProg + '%' : '') + '</span></div>' +
     '<div class="hero-big"><span class="lab">문제 정답률</span><b class="mono">' + (st.acc == null ? '–' : st.acc + '<small>%</small>') + '</b><span class="meta">' + dTxt + '</span></div></div>' +
     '<span class="meter" aria-label="진도 ' + st.prog + '%, 외움 ' + st.knownP + '%"><i style="width:' + st.prog + '%"></i><i class="m2" style="width:' + st.knownP + '%"></i></span>' +
     '<div class="hero-sub"><span><i class="lg l1"></i>배움 ' + st.prog + '%</span><span><i class="lg l2"></i>외움 ' + st.knownP + '%</span><span>푼 문제 ' + st.att + ' / ' + st.qN + '</span>' + (st.gN ? '<span>기출 정답률 ' + (st.gAcc == null ? '–' : st.gAcc + '%') + '</span>' : '') + '</div></div>';
@@ -838,7 +1033,7 @@ function vStudy(){
   } else {
     const p = chunkPreview();
     if (p.rev || p.nNew || p.pool) {
-      const parts = []; if (p.rev) parts.push('복습 ' + p.rev); if (p.nNew) parts.push('새 개념 ' + p.nNew); if (p.q) parts.push('문제 ' + p.q);
+      const parts = []; if (p.rev) parts.push('복습 ' + p.rev); if (p.nNew) parts.push('새 ' + NOUN() + ' ' + p.nNew); if (p.q) parts.push('문제 ' + p.q);
       h += '<button class="start" data-act="cont"><span class="start-k">' + (st.L ? '이어서 공부하기' : '공부 시작하기') + '</span><span class="start-m mono">' + parts.join(' · ') + ' · 약 ' + p.min + '분</span>' + ECG + '</button>';
     } else {
       const pend = pendingSame(now);
@@ -849,7 +1044,7 @@ function vStudy(){
     }
   }
   h += '<button class="btn quick" data-act="start" data-arg="quick"' + (st.L ? '' : ' disabled') + '>3분만 · 복습 카드 5장</button>';
-  h += (cramOn() ? cramBox(st) : '') + modeBox(st);
+  h += (cramOn() ? cramBox(st) : '') + chapterList() + modeBox(st);
   const rows = [];
   rows.push(lrow('go', 'toc:', '목차에서 골라 공부하기', '단원·개념별 진도와 정답률 · 원하는 것만, 부족한 것만 다시'));
   const pool = reviewPool().length; if (pool) rows.push(lrow('quiz', 'pool:', '다시 풀 문제 ' + pool + '개', '틀렸거나 애매했던 문제 · 2번 연속 맞히면 졸업'));
@@ -884,7 +1079,7 @@ function figQuestion(prefer){
 function mixedQs(n, exclude, extra){
   const ex = new Set(extra || []);
   const ready = q => {
-    if (exclude.has(q.id) || q.type !== 'mc') return false;
+    if (exclude.has(q.id) || q.type === 'ox') return false;
     if (q.gc) return q.lk.length > 0 && q.lk.every(l => (l[0] === X.id && ex.has(l[1])) || learnedAny(l[0], l[1]));
     return links(q).length > 0 && links(q).every(c => ex.has(c) || isLearned(c));
   };
@@ -912,13 +1107,13 @@ function buildChunk(kind, arg){
     let asks = 0;
     news.forEach(c => {
       steps.push({ t: 'learn', cid: c.id });
-      const ox = oxOf(c.id); if (ox) steps.push({ t: 'q', qid: ox.id, tag: '바로 확인' });
+      const ox = c.tk ? quickQ(c.id) : oxOf(c.id); if (ox) steps.push({ t: 'q', qid: ox.id, tag: '바로 확인' });
       if (c.fig && S.set.figAsk && IMG.ok && !s.figAsked[c.id] && !imgsOf(X.id, c.id).length && asks < 2) { steps.push({ t: 'figask', cid: c.id }); asks++; }
     });
     shuffle(news).forEach(c => steps.push({ t: 'card', cid: c.id, fresh: true }));
     if (news.length || rev.length) {
       const used = new Set(steps.filter(x => x.qid).map(x => x.qid));
-      mixedQs(2, used, news.map(c => c.id)).forEach(q => qStep(q, '섞어 풀기'));
+      mixedQs(X.kind === 'terms' ? 4 : 2, used, news.map(c => c.id)).forEach(q => qStep(q, '섞어 풀기'));
     }
   } else if (kind === 'quick') {
     let rev = dueList(now).slice(0, 5).map(c => ({ t: 'card', cid: c.id }));
@@ -945,7 +1140,7 @@ function buildChunk(kind, arg){
     const now6 = ids.slice(0, 6); const rest = ids.slice(6);
     const fresh = now6.filter(id => !isLearned(id));
     now6.forEach(id => {
-      if (!isLearned(id)) { steps.push({ t: 'learn', cid: id }); const ox = oxOf(id); if (ox) steps.push({ t: 'q', qid: ox.id, tag: '바로 확인' }); }
+      if (!isLearned(id)) { steps.push({ t: 'learn', cid: id }); const ox = X.cmap[id].tk ? quickQ(id) : oxOf(id); if (ox) steps.push({ t: 'q', qid: ox.id, tag: '바로 확인' }); }
       else if (low(id)) steps.push({ t: 'learn', cid: id, relearn: true });
       else steps.push({ t: 'card', cid: id, practice: true });
     });
@@ -1041,7 +1236,12 @@ function vCardStep(st, s){
   const tag = st.practice ? '연습 · 떠올리기' : st.again ? '다시 한 번' : st.fresh ? '방금 배운 것 · 바로 다시 떠올리기' : '복습 · 떠올리기';
   const mns = mnList(c); const m0 = mns.find(m => m.map && m.map.length);
   let front, back;
-  if (st.v === 'mn' && m0) {
+  if (c.tk) {
+    const r = crec(c.id); const k2e = ((r && r.seen) || 0) % 2 === 1 && qtOn('spell') && !st.fresh;
+    front = k2e ? '<div class="flash-front">' + esc(koMain(c.ko)) + '</div><p class="hint">영어 철자를 떠올려 보세요. 손가락으로 허공에 써 봐도 좋아요</p>'
+      : '<div class="flash-front" lang="en">' + esc(c.t) + '</div><p class="hint">' + (c.tk === 'abbr' ? '풀이와 뜻을' : c.tk === 'part' ? '뜻을' : '뜻과 조각을') + ' 떠올려 보세요</p>';
+    back = termHTML(c, { compact: true }) + (mns[0] ? memoHTML([mns[0]]) : '');
+  } else if (st.v === 'mn' && m0) {
     front = '<div class="flash-front acro">' + esc(m0.k) + '</div><p class="hint">머리글자 퀴즈 · 각 글자가 무엇의 첫 글자인지 떠올려 보세요</p>';
     back = mnHTML(m0, {});
   } else {
@@ -1050,7 +1250,7 @@ function vCardStep(st, s){
     else { front = '<div class="flash-front">' + esc(c.t) + '</div><p class="hint">핵심 내용을 떠올려 보세요</p>'; back = sumHTML(c) + (mns[0] ? memoHTML([mns[0]]) : ''); }
   }
   const fresh = st.fresh || st.practice;
-  return '<div class="ses-tag">' + tag + '</div><article class="flash paper"><div class="flash-meta">' + u.n + '. ' + esc(u.title) + ' · ' + esc(c.t) + '</div>' + front +
+  return '<div class="ses-tag">' + tag + '</div><article class="flash paper"><div class="flash-meta">' + u.n + '. ' + esc(u.title) + (c.tk ? ' · ' + TK_LABEL[c.tk] : ' · ' + esc(c.t)) + '</div>' + front +
     (s.rev ? back + figStrip(c) : '<div class="think" aria-hidden="true"><i></i></div><p class="hint center">답을 보기 전에 먼저 머릿속으로 떠올려 보세요</p>') + '</article>' +
     (s.rev ? '<div class="grade"><button class="g g0" data-act="grade" data-arg="0">몰랐음<small>곧 다시</small></button><button class="g g1" data-act="grade" data-arg="1">헷갈림<small>' + (fresh ? '한 번 더' : '조금 뒤 다시') + '</small></button><button class="g g2" data-act="grade" data-arg="2">알았음<small>' + (fresh ? '다음으로' : '간격 늘리기') + '</small></button></div>'
       : '<button class="btn primary big" id="reveal" data-act="reveal" disabled>답 보기 <span class="mono" id="cd">3</span></button>');
@@ -1112,6 +1312,17 @@ Object.assign(ACT, {
   sadd: a => { const i = a.lastIndexOf(':'); const sid = a.slice(0, i); SS(sid).noAdd = a.slice(i + 1) === '0'; R.sheetCache = null; save(); render(); toast(SS(sid).noAdd ? '추가 내용은 빼고 공부해요. 기록은 그대로 남아요' : '추가 내용도 같이 공부해요'); },
   subjpick: () => { R.t.subjPick = !R.t.subjPick; render(true); },
   subjhide: a => { const h = S.set.hideSubj || (S.set.hideSubj = {}); if (h[a]) delete h[a]; else h[a] = 1; save(); render(); },
+  chopen: a => { R.t.tocOpen = {}; R.t.tocOpen[a] = true; go('toc'); },
+  chstudy: a => {
+    const u = X.umap[a]; if (!u) return;
+    let cs = UC(u); if (!cs.length) cs = u.concepts.filter(addVisible); if (!cs.length) return;
+    const weak = weakSet(); const acc = conceptQAcc(); const low = c => weak.has(c.id) || (acc[c.id] && acc[c.id].ok / acc[c.id].att < 0.6);
+    const fresh = cs.filter(c => !isLearned(c.id)); if (modeOf() !== 'all' || S.set.order === 'pr') fresh.sort((x, y) => y.pr - x.pr);
+    const ids = fresh.concat(cs.filter(c => isLearned(c.id) && low(c)), cs.filter(c => isLearned(c.id) && !low(c))).map(c => c.id);
+    SS().scope = ids; R.t.sel = null; save();
+    startSession('pick', ids.join(','));
+    toast(u.n + '장만 공부해요. 공부 탭의 ‘전체로’를 누르면 다시 과목 전체로 돌아가요');
+  },
   rangenote: () => { S.set.noteRange = modeOf() === 'core' ? 'top2' : 'top'; R.sheetCache = null; save(); ACT.tab('note'); },
   subjects: () => { leaveSubject(); render(true); },
   updok: () => { R.update = null; render(); },
@@ -1158,13 +1369,51 @@ Object.assign(ACT, {
 
 /* ───────── 문제 탭 ───────── */
 function scoped(list){ return S.set.qAll ? list : list.filter(unlocked); }
+/* 골라 풀기: 유형 · 대상 · 장 · 문항 수 */
+function qbTypes(){ return X.kind === 'terms' ? [['spell', '철자 쓰기'], ['mean', '뜻 쓰기'], ['mc', '객관식']] : [['ox', 'O/X'], ['basic', '객관식 기본'], ['ns', '국시 수준'], ['사례형', '사례형'], ['우선순위', '우선순위'], ['부정형', '부정형'], ['수치 해석', '수치 해석'], ['발달 단계', '발달 단계']]; }
+function qTags(q){
+  if (q.gc) return ['ns', 'gc'];
+  const t = qtOf(q); if (t) return [t];
+  if (q.type === 'ox') return ['ox'];
+  const out = [q.lv === 2 ? 'ns' : 'basic']; if (q.tag) out.push(q.tag); if (q.case && !q.tag) out.push('사례형'); return out;
+}
+function qbState(){
+  const s = SS(); if (!s.qb) s.qb = { t: {}, k: { word: 1, part: 1, abbr: 1 }, u: '', n: 20, exam: false };
+  if (!Object.keys(s.qb.t).length) qbTypes().forEach(z => { s.qb.t[z[0]] = 1; });
+  return s.qb;
+}
+function qbPool(){
+  const b = qbState();
+  return scoped(X.qs.filter(qInBase).concat(customQs())).filter(q => {
+    if (b.u && q.u !== b.u) return false;
+    if (!qTags(q).some(t => b.t[t])) return false;
+    if (X.kind === 'terms' && q.gen) { const c = X.cmap[q.c[0]]; if (c && c.tk && !b.k[c.tk]) return false; }
+    return true;
+  });
+}
+function qbHTML(){
+  const b = qbState(); const n = qbPool().length;
+  return '<h3 class="h3">골라 풀기 <span>유형 · 장 · 문항 수를 골라요</span></h3><div class="qb">' +
+    '<div class="so-row"><span class="lab">문제 유형</span><div class="chips-wrap">' + qbTypes().map(z => '<button class="chip-btn' + (b.t[z[0]] ? ' on' : '') + '" data-act="qbt" data-arg="' + esc(z[0]) + '" aria-pressed="' + !!b.t[z[0]] + '">' + z[1] + '</button>').join('') + '</div></div>' +
+    (X.kind === 'terms' ? '<div class="so-row"><span class="lab">대상</span><div class="chips-wrap">' + [['word', '단어'], ['part', '조각'], ['abbr', '약어']].map(z => '<button class="chip-btn' + (b.k[z[0]] ? ' on' : '') + '" data-act="qbk" data-arg="' + z[0] + '" aria-pressed="' + !!b.k[z[0]] + '">' + z[1] + '</button>').join('') + '</div></div>' : '') +
+    '<div class="so-row"><span class="lab">장</span><select id="qb-u" aria-label="장 고르기"><option value="">전체</option>' + X.units.map(u => '<option value="' + u.id + '"' + (b.u === u.id ? ' selected' : '') + '>' + u.n + '. ' + esc(u.title) + '</option>').join('') + '</select></div>' +
+    '<div class="so-row"><span class="lab">문항 수</span><div class="seg sm" role="group">' + [10, 20, 30, 50].map(k => '<button data-act="qbn" data-arg="' + k + '" aria-pressed="' + (b.n === k) + '">' + k + '</button>').join('') + '</div></div>' +
+    '<label class="check"><input type="checkbox" id="qb-exam"' + (b.exam ? ' checked' : '') + '> 시험처럼 (문제당 1분, 해설은 끝나고 한꺼번에)</label>' +
+    '<button class="btn primary big" data-act="quiz" data-arg="build:"' + (n ? '' : ' disabled') + '>' + (n ? Math.min(n, b.n) + '문제 풀기' + (n < b.n ? ' (조건에 맞는 문제가 ' + n + '개)' : '') : '조건에 맞는 문제가 없어요') + '</button></div>';
+}
+function qtypeHTML(){
+  if (X.kind !== 'terms') return '';
+  return '<div class="mode-box"><div class="so-row"><span class="lab">평소 공부에 나오는 문제 유형 <small>내 시험에 나오는 것만 켜세요</small></span><div class="chips-wrap">' +
+    Object.keys(QT_LABEL).map(k => '<button class="chip-btn' + (qtOn(k) ? ' on' : '') + '" data-act="qtype" data-arg="' + k + '" aria-pressed="' + qtOn(k) + '">' + QT_LABEL[k] + '</button>').join('') + '</div></div></div>';
+}
 function vQuizTab(){
+  const terms = X.kind === 'terms';
   const all = allQ(); const qa = qStats(all); const pool = reviewPool().length; const z = SS().qz;
-  const open = all.filter(unlocked).length; const mcs = all.filter(q => q.type === 'mc');
+  const open = all.filter(unlocked).length; const mcs = all.filter(q => q.type !== 'ox');
   const nNs = scoped(mcs.filter(q => q.lv === 2)).length, nCase = scoped(mcs.filter(q => q.case || q.tag === '사례형')).length, nMc = scoped(mcs).length;
   const nTop = scoped(mcs.filter(isTopQ)).length, nAddAll = all.filter(isAdd).length, nAdd = scoped(all.filter(isAdd)).length;
-  let h = subjTop() + '<section><h1>문제</h1><p class="sub">문제는 관련 개념을 모두 배우면 열려요. 틀렸거나 애매했던 문제는 다시 나오고, 2번 연속 깔끔하게 맞히면 졸업해요.</p>' +
-    (modeOf() !== 'all' ? '<p class="mode-note"><b>' + MODES[modeOf()].name + '</b> 모드라 ' + MODES[modeOf()].range + ' 개념의 문제만 나와요. 공부 탭이나 첫 화면에서 모드를 바꿀 수 있어요.</p>' : '') +
+  let h = subjTop() + '<section><h1>문제</h1><p class="sub">' + (terms ? '문제는 그 단어·조각·약어를 배우면 열려요. 철자 쓰기, 뜻 쓰기, 객관식이 단어마다 자동으로 만들어져요.' : '문제는 관련 개념을 모두 배우면 열려요.') + ' 틀렸거나 애매했던 문제는 다시 나오고, 2번 연속 깔끔하게 맞히면 졸업해요.</p>' +
+    (modeOf() !== 'all' ? '<p class="mode-note"><b>' + MODES[modeOf()].name + '</b> 모드라 ' + MODES[modeOf()].range + ' ' + NOUN() + '의 문제만 나와요. 공부 탭이나 첫 화면에서 모드를 바꿀 수 있어요.</p>' : '') +
     (addOff() ? '<p class="mode-note">추가 내용은 빼고 공부하는 중이라 추가된 문제는 나오지 않아요.</p>' : '') +
     '<div class="stats3"><div><b>' + qa.att + '<small>/' + all.length + '</small></b><span>푼 문제</span></div><div><b>' + (qa.acc == null ? '–' : qa.acc + '%') + '</b><span>정답률</span></div><div><b>' + pool + '</b><span>다시 풀 문제</span></div></div>';
   if (z && !z.done) {
@@ -1172,22 +1421,24 @@ function vQuizTab(){
     h += '<div class="notice resume"><b>풀던 문제가 있어요</b><p>' + esc(z.title) + ' · ' + (z.i + 1) + '/' + z.ids.length + (z.limit ? ' · 남은 시간 ' + fmtMs(left) : '') + '</p><div class="row-btns"><button class="btn primary" data-act="qresume">이어 풀기</button><button class="btn" data-act="qdrop">그만두기</button></div></div>';
   }
   h += '<div class="seg scope" role="group" aria-label="문제 범위"><button data-act="qscope" data-arg="0" aria-pressed="' + !S.set.qAll + '">배운 범위만 · 열린 ' + open + '문제</button><button data-act="qscope" data-arg="1" aria-pressed="' + !!S.set.qAll + '">전체 범위</button></div>' +
-    '<div class="list">' +
-    lrow('quiz', 'ns:', '국시형만 풀기', (nNs > 15 ? nNs + '문제 중 15문제' : nNs + '문제') + ' · 사례형, 우선순위, 부정형, 수치 해석', { dis: !nNs }) +
-    (modeOf() !== 'all' ? lrow('quiz', 'range:', MODES[modeOf()].range + ' 범위 문제 테스트', '객관식 15 + O/X 5 · 지금 모드의 범위에서', { dis: !nMc }) : '') +
-    lrow('quiz', 'top:', '자주 출제 개념 문제', (nTop > 15 ? nTop + '문제 중 15문제' : nTop + '문제') + ' · ★★★ 개념과 연결된 문제', { dis: !nTop, tag: ' <span class="prs p3">★★★</span>' }) +
+    qtypeHTML() + qbHTML() +
+    '<h3 class="h3">바로 풀기</h3><div class="list">' +
+    (terms ? '' : lrow('quiz', 'ns:', '국시형만 풀기', (nNs > 15 ? nNs + '문제 중 15문제' : nNs + '문제') + ' · 사례형, 우선순위, 부정형, 수치 해석', { dis: !nNs })) +
+    (modeOf() !== 'all' ? lrow('quiz', 'range:', MODES[modeOf()].range + ' 범위 문제 테스트', '20문제 · 지금 모드의 범위에서', { dis: !nMc }) : '') +
+    lrow('quiz', 'top:', terms ? '자주 쓰는 단어 문제' : '자주 출제 개념 문제', (nTop > 15 ? nTop + '문제 중 15문제' : nTop + '문제') + ' · ★★★ ' + NOUN() + '과 연결된 문제', { dis: !nTop, tag: ' <span class="prs p3">★★★</span>' }) +
     lrow('quiz', 'pool:', '다시 풀 문제', pool ? pool + '문제 · 틀렸거나 애매했거나 힌트를 본 문제' : '아직 없어요', { dis: !pool }) +
-    lrow('quiz', 'case:', '사례형 집중', (nCase > 15 ? nCase + '문제 중 15문제' : nCase + '문제') + ' · 환자 상황 문제', { dis: !nCase }) +
-    (nAddAll ? lrow('quiz', 'add:', '추가된 문제', (nAdd > 15 ? nAdd + '문제 중 15문제' : nAdd + '문제') + ' · 새로 추가된 개념의 문제', { dis: !nAdd, tag: ADD_TAG }) : '') + '</div>' +
-    '<h3 class="h3">단원 테스트 <span>O/X 4개 + 객관식 8개</span></h3><div class="chips-wrap">' + X.units.map(u => { const n = scoped(all.filter(q => q.u === u.id)).length; return '<button class="chip-btn" data-act="quiz" data-arg="unit:' + u.id + '"' + (n ? '' : ' disabled') + '>' + u.n + '. ' + esc(u.short || u.title) + ' <span class="mono">' + n + '</span></button>'; }).join('') + '</div>' +
+    (terms ? '' : lrow('quiz', 'case:', '사례형 집중', (nCase > 15 ? nCase + '문제 중 15문제' : nCase + '문제') + ' · 환자 상황 문제', { dis: !nCase })) +
+    (nAddAll ? lrow('quiz', 'add:', '추가된 문제', (nAdd > 15 ? nAdd + '문제 중 15문제' : nAdd + '문제') + ' · 새로 추가된 내용의 문제', { dis: !nAdd, tag: ADD_TAG }) : '') + '</div>' +
+    '<h3 class="h3">장별 테스트 <span>' + (terms ? '12문제 · 쓰기와 객관식 섞어서' : 'O/X 4개 + 객관식 8개') + '</span></h3><div class="chips-wrap">' + X.units.map(u => { const n = scoped(all.filter(q => q.u === u.id)).length; return '<button class="chip-btn" data-act="quiz" data-arg="unit:' + u.id + '"' + (n ? '' : ' disabled') + '>' + u.n + '. ' + esc(u.short || u.title) + ' <span class="mono">' + n + '</span></button>'; }).join('') + '</div>' +
     '<h3 class="h3">실전 모의고사 <span>문제당 1분 · 해설은 끝나고 한꺼번에 · 중간에 나가도 이어서 풀 수 있어요</span></h3><div class="row-btns">' +
     '<button class="btn" data-act="quiz" data-arg="mock:20"' + (nMc ? '' : ' disabled') + '>20문제</button><button class="btn" data-act="quiz" data-arg="mock:40"' + (nMc ? '' : ' disabled') + '>40문제</button></div>' +
-    (nMc < 20 && !S.set.qAll ? '<p class="hint">아직 열린 객관식이 ' + nMc + '문제라 모의고사가 짧아요. 개념을 더 배우거나 ‘전체 범위’를 고르세요.</p>' : '') +
-    '<h3 class="h3">기출 · 내 문제</h3><div class="list">' +
-    lrow('go', 'gichul:', '국시 기출 (내 폰에만 저장)', G.qs.length ? G.sets.length + '회차 · ' + G.qs.length + '문항 · ' + esc(X.title) + ' 연결 ' + gcQs().length + '문항' : '국시원 기출 PDF를 붙여넣어 풀기') +
+    (nMc < 20 && !S.set.qAll ? '<p class="hint">아직 열린 문제가 ' + nMc + '개라 모의고사가 짧아요. 더 배우거나 ‘전체 범위’를 고르세요.</p>' : '') +
+    '<h3 class="h3">' + (terms ? '내 문제' : '기출 · 내 문제') + '</h3><div class="list">' +
+    (terms ? '' : lrow('go', 'gichul:', '국시 기출 (내 폰에만 저장)', G.qs.length ? G.sets.length + '회차 · ' + G.qs.length + '문항 · ' + esc(X.title) + ' 연결 ' + gcQs().length + '문항' : '국시원 기출 PDF를 붙여넣어 풀기')) +
     lrow('go', 'custom:', '내가 넣은 문제', (SS().custom || []).length + '문제 · 학교 기출, 교수님 문제 등') +
     lrow('go', 'wrongs:', '오답노트 보기', pool ? '정답과 해설 한 번에 보기' : '틀린 문제가 생기면 여기에 모여요', { dis: !pool }) + '</div>' +
-    '<p class="note">간호사 국가시험은 8과목 295문항이고, 총점 60% 이상이면서 과목별 40% 이상이어야 합격해요. 기출문제는 저작권이 있어 개인 공부용으로만 쓰세요.</p></section>';
+    (terms ? '<p class="note">뜻 쓰기는 비슷한 표현도 맞게 채점하려고 하지만 완벽하지 않아요. 내 답이 맞는데 틀렸다고 나오면 ‘내 답도 맞아요’를 누르세요. 다음부터 그 답도 맞게 채점해요.</p>'
+      : '<p class="note">간호사 국가시험은 8과목 295문항이고, 총점 60% 이상이면서 과목별 40% 이상이어야 합격해요. 기출문제는 저작권이 있어 개인 공부용으로만 쓰세요.</p>') + '</section>';
   return h;
 }
 
@@ -1196,27 +1447,33 @@ function ensureAns(z, q){ return z.ans[q.id] || (z.ans[q.id] = { perm: permFor(q
 function isTopQ(q){ return links(q).some(cid => X.cmap[cid] && X.cmap[cid].pr === 3); }
 function startQuiz(mode, arg){
   const all = allQ(); let ids = [], title = '', instant = true, limit = 0, set = null;
-  const mcs = all.filter(q => q.type === 'mc');
+  const mcs = all.filter(q => q.type !== 'ox');
   const gReady = g => g.a >= 0 && g.o.length >= 2;
   if (mode === 'ns') { ids = shuffle(scoped(mcs.filter(q => q.lv === 2))).slice(0, 15).map(q => q.id); title = '국시형 문제'; }
   else if (mode === 'unit') {
     const pool = scoped(all.filter(q => q.u === arg));
-    ids = shuffle(pool.filter(q => q.type === 'ox')).slice(0, 4).concat(shuffle(pool.filter(q => q.type === 'mc')).slice(0, 8)).map(q => q.id);
+    const oxs = shuffle(pool.filter(q => q.type === 'ox')).slice(0, 4);
+    ids = oxs.concat(shuffle(pool.filter(q => q.type !== 'ox')).slice(0, 12 - oxs.length)).map(q => q.id);
     title = X.umap[arg].n + '단원 테스트';
   } else if (mode === 'mock') {
     const pool = shuffle(scoped(mcs)); const n = Math.min(+arg || 20, pool.length);
     ids = pool.slice(0, n).map(q => q.id); instant = false; limit = n * MIN; title = '실전 모의고사 ' + n + '문제';
   } else if (mode === 'pool') { ids = reviewPool().map(q => q.id); title = '다시 풀 문제'; }
-  else if (mode === 'range') { const pool = scoped(all); ids = shuffle(pool.filter(q => q.type === 'mc')).slice(0, 15).concat(shuffle(pool.filter(q => q.type === 'ox')).slice(0, 5)).map(q => q.id); title = MODES[modeOf()].range + ' 문제 테스트'; }
+  else if (mode === 'build') {
+    const b = qbState(); const pool = shuffle(qbPool()).slice(0, b.n);
+    ids = pool.map(q => q.id); instant = !b.exam; if (b.exam) limit = ids.length * MIN;
+    title = '골라 풀기 · ' + qbTypes().filter(z => b.t[z[0]]).map(z => z[1]).join('·') + (b.u && X.umap[b.u] ? ' · ' + X.umap[b.u].n + '장' : '');
+  }
+  else if (mode === 'range') { const pool = scoped(all); const oxs = shuffle(pool.filter(q => q.type === 'ox')).slice(0, 5); ids = shuffle(pool.filter(q => q.type !== 'ox')).slice(0, 20 - oxs.length).concat(oxs).map(q => q.id); title = MODES[modeOf()].range + ' 문제 테스트'; }
   else if (mode === 'top') { ids = shuffle(scoped(mcs.filter(isTopQ))).slice(0, 15).map(q => q.id); title = '★★★ 자주 출제 개념 문제'; }
-  else if (mode === 'add') { const pool = scoped(all.filter(isAdd)); ids = shuffle(pool.filter(q => q.type === 'mc')).slice(0, 12).concat(shuffle(pool.filter(q => q.type === 'ox')).slice(0, 3)).map(q => q.id); title = '추가된 문제'; }
+  else if (mode === 'add') { const pool = scoped(all.filter(isAdd)); ids = shuffle(pool.filter(q => q.type !== 'ox')).slice(0, 12).concat(shuffle(pool.filter(q => q.type === 'ox')).slice(0, 3)).map(q => q.id); title = '추가된 문제'; }
   else if (mode === 'case') { ids = shuffle(scoped(mcs.filter(q => q.case || q.tag === '사례형'))).slice(0, 15).map(q => q.id); title = '사례형 집중'; }
   else if (mode === 'custom') { ids = shuffle(customQs()).map(q => q.id); title = '내가 넣은 문제'; }
   else if (mode === 'sel') {
     const set = new Set(String(arg).split(','));
     const pool = scoped(all.concat(gcQs()).filter(q => links(q).some(c => set.has(c)) && (!q.gc || q.a >= 0)));
-    ids = shuffle(pool.filter(q => q.type === 'mc')).slice(0, 15).concat(shuffle(pool.filter(q => q.type === 'ox')).slice(0, 5)).map(q => q.id);
-    title = '고른 개념 문제';
+    ids = shuffle(pool.filter(q => q.type !== 'ox')).slice(0, 15).concat(shuffle(pool.filter(q => q.type === 'ox')).slice(0, 5)).map(q => q.id);
+    title = '고른 ' + NOUN() + ' 문제';
     if (!ids.length) { toast('고른 개념을 아직 배우지 않아서 열린 문제가 없어요. ‘고른 것 공부’를 먼저 하거나 문제 탭에서 ‘전체 범위’를 고르세요'); return; }
   }
   else if (mode === 'cq') { ids = shuffle(allQx().concat(gcQs()).filter(q => links(q).includes(arg) && (!q.gc || q.a >= 0))).map(q => q.id); title = (X.cmap[arg] ? X.cmap[arg].t : '개념') + ' 문제'; }
@@ -1246,18 +1503,18 @@ function submitQuiz(){
   clearInterval(T.quiz); if (z.t0) { z.used += Date.now() - z.t0; z.t0 = null; }
   z.ids.forEach(id => {
     const q = Q(id); if (!q) return; const a = ensureAns(z, q);
-    if (!z.instant) { a.ok = a.pick === q.a; a.shown = true; recordQ(q, a.ok, a); if (!a.ok) penalize(q, null); a.settled = true; }
+    if (!z.instant) { if (q.type === 'wr') { a.ok = !!a.inp && gradeWr(q, a.inp).ok; a.pick = a.inp ? (a.ok ? 0 : 1) : null; } else a.ok = a.pick === q.a; a.shown = true; recordQ(q, a.ok, a); if (!a.ok) penalize(q, null); a.settled = true; }
     else if (!a.shown) { a.ok = false; a.shown = true; a.skipped = true; }
     else settleQ(q, a);
   });
   z.done = true;
   const n = z.ids.length, ok = z.ids.filter(id => z.ans[id] && z.ans[id].ok).length;
-  if (['mock', 'unit', 'gset', 'ns'].includes(z.mode)) { SS().exams.push({ ts: Date.now(), title: z.title, n, ok, by: quizBy(z), mode: z.mode, set: z.set }); SS().exams = SS().exams.slice(-60); }
+  if (['mock', 'unit', 'gset', 'ns'].includes(z.mode) || (z.mode === 'build' && !z.instant)) { SS().exams.push({ ts: Date.now(), title: z.title, n, ok, by: quizBy(z), mode: z.mode, set: z.set }); SS().exams = SS().exams.slice(-60); }
   save(); render(true);
 }
 function quizBy(z){
   const by = {};
-  z.ids.forEach(id => { const q = Q(id); if (!q) return; const k = z.mode === 'gset' ? (q.sub || '기타') : (q.u && X.umap[q.u] ? X.umap[q.u].n + '. ' + (X.umap[q.u].short || X.umap[q.u].title) : '기타'); by[k] = by[k] || [0, 0]; by[k][1]++; if (z.ans[id] && z.ans[id].ok) by[k][0]++; });
+  z.ids.forEach(id => { const q = Q(id); if (!q) return; const k = z.mode === 'gset' ? (q.sub || '기타') : (X.kind === 'terms' && qtOf(q)) ? QT_LABEL[qtOf(q)] : (q.u && X.umap[q.u] ? X.umap[q.u].n + '. ' + (X.umap[q.u].short || X.umap[q.u].title) : '기타'); by[k] = by[k] || [0, 0]; by[k][1]++; if (z.ans[id] && z.ans[id].ok) by[k][0]++; });
   return by;
 }
 function vQuiz(){
@@ -1267,7 +1524,7 @@ function vQuiz(){
   if (z.done) return vQuizResult(z);
   const q = Q(z.ids[z.i]); const st = ensureAns(z, q); const n = z.ids.length;
   const ns = z.instant ? 'qz' : 'mk'; const canNext = z.instant ? !!st.shown : true;
-  const answered = z.ids.filter(id => z.ans[id] && z.ans[id].pick != null).length;
+  const answered = z.ids.filter(id => z.ans[id] && (z.ans[id].pick != null || z.ans[id].inp)).length;
   return '<div>' + fullBar('<div class="pbar"><i style="width:' + pct(z.i, n) + '%"></i></div><span class="mono ses-n">' + (z.i + 1) + '/' + n + '</span>' + (z.limit ? '<span class="mono timer" id="qtimer">' + fmtMs(quizLeft(z)) + '</span>' : ''), 'qexit') +
     '<div class="ses-tag">' + esc(z.title) + (q.u && X.umap[q.u] ? ' · ' + X.umap[q.u].n + '단원' : '') + '</div>' + qHTML(q, st, ns) +
     '<div class="qnav">' + (!z.instant && z.i > 0 ? '<button class="btn" data-act="qprev">이전 문제</button>' : '') + (canNext ? '<button class="btn primary big" data-act="qnext">' + (z.i === n - 1 ? (z.instant ? '결과 보기' : '제출하기') : '다음') + '</button>' : '') + '</div>' +
@@ -1280,7 +1537,7 @@ function vQuizResult(z){
   const low = Object.keys(by).filter(k => by[k][1] >= 3 && pct(by[k][0], by[k][1]) < 40);
   const verdict = pc >= 60 ? (low.length ? '총점은 합격선(60%) 이상이지만 과락(40% 미만) 과목이 있어요: ' + low.join(', ') : '합격선(60%) 이상이에요') : pc >= 40 ? '과락선은 넘었지만 합격선(60%)까지 ' + (60 - pc) + '%p 남았어요' : '과락선(40%) 아래예요. 틀린 개념부터 다시 봐요';
   return '<div>' + subBar(z.title, HOME_BTN) + '<div class="done-card"><div class="eyebrow">결과</div><h2>' + ok + ' / ' + n + ' · ' + pc + '%</h2><p>' + esc(verdict) + '</p>' +
-    '<h3 class="h3">' + (z.mode === 'gset' ? '과목별' : '단원별') + ' 정답률 <span>점선 40% 과락 · 실선 60% 합격</span></h3>' +
+    '<h3 class="h3">' + (z.mode === 'gset' ? '과목별' : X.kind === 'terms' ? '유형별' : '단원별') + ' 정답률 <span>점선 40% 과락 · 실선 60% 합격</span></h3>' +
     Object.keys(by).map(k => { const v = by[k]; const p2 = pct(v[0], v[1]); return '<div class="ubar"><span>' + esc(k) + '</span><span class="ub"><i class="' + (p2 < 40 ? 'low' : '') + '" style="width:' + p2 + '%"></i></span><b>' + p2 + '%</b></div>'; }).join('') +
     (Object.keys(rs).length ? '<p class="hint">틀린 이유: ' + Object.keys(rs).map(k => k + ' ' + rs[k]).join(' · ') + (rs['잘못 읽음'] ? ' — 문제의 핵심어(옳지 않은 것, 가장 먼저)에 밑줄 긋는 습관을 들여 보세요.' : '') + '</p>' : '') +
     '<div class="row-btns">' + (wrongIds.length ? '<button class="btn primary" data-act="quiz" data-arg="pool:">다시 풀 문제 풀기</button>' : '') + '<button class="btn" data-act="qdone">닫기</button></div></div>' +
@@ -1297,6 +1554,12 @@ V.qview = p => {
   const st = (R.t.qv && R.t.qv.id === p.id) ? R.t.qv.st : (R.t.qv = { id: p.id, st: { perm: permFor(q) } }).st;
   return subBar('문제') + '<section>' + (!unlocked(q) ? '<p class="hint">아직 배우지 않은 개념이 연결된 문제예요.</p>' : '') + qHTML(q, st, 'qv') + '</section>';
 };
+function wrFinish(ns, x, v, ok){
+  const q = x.q, st = x.st;
+  st.inp = v; st.pick = ok ? 0 : 1; st.shown = true; st.ok = ok; recordQ(q, ok, st);
+  if (ns === 'sq') { const s = SS().ses; s.st.qn++; if (ok) s.st.qok++; }
+  save(); render();
+}
 function nsState(ns){
   if (ns === 'sq') { const s = SS().ses; const step = s && s.steps[s.i]; if (!step || step.t !== 'q') return null; const q = Q(step.qid); if (!s.q) s.q = { perm: permFor(q) }; return { q, st: s.q }; }
   if (ns === 'qz' || ns === 'mk') { const z = SS().qz; if (!z) return null; const q = Q(z.ids[z.i]); return q ? { q, st: ensureAns(z, q) } : null; }
@@ -1592,6 +1855,28 @@ Object.assign(ACT, {
     save(); render();
   },
   hint: a => { const x = nsState(a); if (!x) return; x.st.hint = true; save(); render(); },
+  wrok: a => {
+    const x = nsState(a); if (!x || x.st.shown) return; const q = x.q, st = x.st;
+    const el = $('#wr-in'); const v = el ? el.value.trim() : '';
+    if (!v) { toast('답을 써 주세요. 모르면 ‘모르겠어요’를 눌러요'); return; }
+    const g = gradeWr(q, v);
+    if (!g.ok && g.near && !st.near) { st.near = v; st.inp = v; st.hint = true; save(); render(); return; }
+    wrFinish(a, x, v, g.ok);
+  },
+  wrgive: a => { const x = nsState(a); if (!x || x.st.shown) return; const el = $('#wr-in'); wrFinish(a, x, el ? el.value.trim() : '', false); },
+  wrhint: a => { const x = nsState(a); if (!x) return; const el = $('#wr-in'); if (el) x.st.inp = el.value; x.st.hl = (x.st.hl || 0) + 1; if (x.st.hl === 2 && !x.q.hp) x.st.hl = 3; x.st.hint = true; save(); render(); },
+  wrfix: a => {
+    const x = nsState(a); if (!x || !x.st.shown || x.st.ok) return; const q = x.q, st = x.st;
+    st.ok = true; st.pick = 0; const r = qrecMake(q); r.w = Math.max(0, (r.w || 0) - 1); r.r = (r.r || 0) + 1; r.lastOk = true; r.wrong = false; r.streak = (r.streak || 0) + 1;
+    const d = SS().d[dkey(Date.now())]; if (d) d[0]++;
+    if (a === 'sq') { const s = SS().ses; if (s) s.st.qok++; }
+    const w = SS().wra || (SS().wra = {}); w[q.id] = (w[q.id] || []).concat([st.inp]).slice(-5);
+    save(); render(); toast('맞은 걸로 바꿨어요. 다음부터 이 답도 맞게 채점해요');
+  },
+  qbt: a => { const b = qbState(); if (b.t[a]) delete b.t[a]; else b.t[a] = 1; save(); render(); },
+  qbk: a => { const b = qbState(); if (b.k[a]) delete b.k[a]; else b.k[a] = 1; save(); render(); },
+  qbn: a => { qbState().n = +a; save(); render(); },
+  qtype: a => { const s = SS(); const t = s.qtypes || (s.qtypes = { spell: true, mean: true, mc: true }); t[a] = !qtOn(a); if (!Object.keys(QT_LABEL).some(k => t[k] !== false)) { t[a] = true; toast('적어도 한 가지는 켜 두세요'); } save(); render(); },
   conf: a => {
     const p = a.split(':'); const x = nsState(p[0]); if (!x) return;
     x.st.conf = x.st.conf === p[1] ? null : p[1]; save(); render();
@@ -1697,6 +1982,14 @@ function sheetConcepts(){
 }
 function sheetItem(c, weak, mode){
   const m = mnList(c)[0];
+  if (c.tk) {
+    const ps = termParts(c);
+    let h = '<div class="ni nt' + (weak ? ' weak' : '') + '" data-act="nsheet" data-arg="' + c.id + '"><div class="ni-t">' + (weak ? '<i>!</i>' : '') + '<span class="ns">' + '★'.repeat(c.pr || 2) + '</span><b class="ni-en">' + esc(c.t) + '</b> ' + esc(koMain(c.ko)) + (isAdd(c) ? '<span class="na">추가</span>' : '') + '</div>';
+    if (c.full) h += '<div class="ni-1">' + esc(c.full) + '</div>';
+    if (ps.length) h += '<div class="ni-map">' + ps.map(p => esc(p.f) + (p.m ? ' ' + esc(p.m) : '')).join(' + ') + '</div>';
+    if (mode === 'sum') { if (c.mean && c.mean !== koMain(c.ko)) h += '<div class="ni-1">' + esc(c.mean) + '</div>'; if (m) h += '<div class="ni-m">' + (m.k ? '<b class="ni-k">' + esc(m.k) + '</b> ' : '') + bold(m.s) + '</div>'; }
+    return h + '</div>';
+  }
   let h = '<div class="ni' + (weak ? ' weak' : '') + '" data-act="nsheet" data-arg="' + c.id + '"><div class="ni-t">' + (weak ? '<i>!</i>' : '') + '<span class="ns">' + '★'.repeat(c.pr || 2) + '</span>' + esc(c.t) + (isAdd(c) ? '<span class="na">추가</span>' : '') + '</div>';
   if (m) h += '<div class="ni-m">' + (m.k ? '<b class="ni-k">' + esc(m.k) + '</b> ' : '') + bold(m.s) + '</div>';
   if (mode === 'sum') {
@@ -1752,7 +2045,7 @@ function buildSheet(){
   if (!R.sheetCache || R.sheetCache.key !== key) {
     const b = sheetBlocks();
     const d = new Date();
-    const head = '<b>' + esc(X.title) + ' 암기노트</b><span>' + RANGE_LABEL[S.set.noteRange] + ' · ' + (S.set.noteMode === 'sum' ? '요약 포함' : '암기용') + ' · 개념 ' + b.n + '개 · ★★★ 자주 출제 ★★ 중요 ★ 기본 · ' + d.getFullYear() + '.' + (d.getMonth() + 1) + '.' + d.getDate() + '</span>';
+    const head = '<b>' + esc(X.title) + ' 암기노트</b><span>' + RANGE_LABEL[S.set.noteRange] + ' · ' + (S.set.noteMode === 'sum' ? '요약 포함' : '암기용') + ' · ' + NOUN() + ' ' + b.n + '개 · ★★★ 자주 출제 ★★ 중요 ★ 기본 · ' + d.getFullYear() + '.' + (d.getMonth() + 1) + '.' + d.getDate() + '</span>';
     R.sheetCache = { key, pages: b.n ? paginate(b.blocks, head) : [], n: b.n };
     R.pdf = null;
   }
@@ -1761,7 +2054,7 @@ function buildSheet(){
 function showSheet(){
   const wrap = $('#a4wrap'); if (!wrap || !R.sheetCache) return;
   const pages = R.sheetCache.pages; const info = $('#npages');
-  if (info) info.textContent = '개념 ' + R.sheetCache.n + '개 · A4 ' + pages.length + '쪽';
+  if (info) info.textContent = NOUN() + ' ' + R.sheetCache.n + '개 · A4 ' + pages.length + '쪽';
   if (!pages.length) { wrap.innerHTML = '<p class="empty">' + (S.set.noteRange === 'learned' ? '아직 배운 개념이 없어요. 공부 탭에서 먼저 배워요.' : '약한 개념이 아직 없어요. 문제를 풀면 자주 틀리는 개념이 여기에 모여요.') + '</p>'; return; }
   const big = S.set.noteZoom === 'big';
   const W = Math.max(280, wrap.clientWidth); const s = big ? 1 : W / 794;
@@ -1933,6 +2226,17 @@ V.listen = () => {
     '<button class="btn primary big" data-act="' + (L.playing ? 'lstop' : 'lplay') + '"' + (ok ? '' : ' disabled') + '>' + (L.playing ? '멈추기' : '듣기 시작') + '</button></section>';
 };
 function wait(ms){ return new Promise(r => setTimeout(r, ms)); }
+function sayEn(t){
+  return new Promise(res => {
+    try {
+      if (!('speechSynthesis' in window)) { toast('이 기기에서는 발음 듣기를 쓸 수 없어요'); return res(); }
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(String(t).replace(/[\/]/g, ' ').replace(/^-|-$/g, '')); u.lang = 'en-US'; u.rate = 0.8;
+      const v = (speechSynthesis.getVoices() || []).find(z => /^en(-|_)/i.test(z.lang)); if (v) u.voice = v;
+      u.onend = () => res(); u.onerror = () => res(); speechSynthesis.speak(u); setTimeout(res, 6000);
+    } catch (e) { res(); }
+  });
+}
 function say(t){
   return new Promise(res => {
     try {
@@ -2377,10 +2681,10 @@ V.unit = p => {
   return subBar(u.n + '. ' + u.title) + '<section>' + viewSeg() +
     '<ol class="clist">' + u.concepts.map(c => {
       const st = status(c.id); const im = imgsOf(X.id, c.id).length;
-      return '<li><button class="crow" data-act="go" data-arg="concept:' + c.id + '"><span class="mono cn">' + u.n + '-' + c.n + '</span><span class="ct">' + prMark(c) + esc(c.t) + cTags(c) + (inRange(c) ? '' : '<span class="outc">범위 밖</span>') + '</span><span class="chip st-' + st + '">' + ST_LABEL[st] + '</span>' + (im ? '<span class="chip c-edit">그림 ' + im + '</span>' : '') + (SS().flags[c.id] ? '<span class="chip c-flag">확인 필요</span>' : '') + '</button></li>';
+      return '<li><button class="crow" data-act="go" data-arg="concept:' + c.id + '"><span class="mono cn">' + u.n + '-' + c.n + '</span><span class="ct">' + prMark(c) + esc(c.t) + koTag(c) + cTags(c) + (inRange(c) ? '' : '<span class="outc">범위 밖</span>') + '</span><span class="chip st-' + st + '">' + ST_LABEL[st] + '</span>' + (im ? '<span class="chip c-edit">그림 ' + im + '</span>' : '') + (SS().flags[c.id] ? '<span class="chip c-flag">확인 필요</span>' : '') + '</button></li>';
     }).join('') + '</ol>' +
     '<div class="row-btns"><button class="btn" data-act="start" data-arg="practice:' + u.id + '">이 단원 카드 연습</button><button class="btn" data-act="quiz" data-arg="unit:' + u.id + '">이 단원 테스트</button></div>' +
-    '<button class="btn ghost addc-btn" data-act="mycnew" data-arg="' + u.id + '">' + ICON.edit + '이 단원에 내 개념 추가</button></section>';
+    '<button class="btn ghost addc-btn" data-act="mycnew" data-arg="' + u.id + '">' + ICON.edit + (X.kind === 'terms' ? '이 장에 내 단어 추가' : '이 단원에 내 개념 추가') + '</button></section>';
 };
 V.concept = p => {
   const c = C(p.id); if (!c) return subBar('개념') + '<p class="empty">개념을 찾을 수 없어요.</p>';
@@ -2402,6 +2706,18 @@ V.edit = p => {
   const b0 = X.cmap[p.id]; if (!b0) return subBar('내용 수정') + '<p class="empty">개념을 찾을 수 없어요.</p>';
   if (b0.mine) return V.myc({ id: p.id });
   const c = C(p.id), b = b0, o = b.o0 || b, has = !!SS().edits[p.id];
+  if (b0.tk) return subBar('내용 수정') + '<section><h1 class="h-sm">' + esc(c.t) + ' · ' + TK_LABEL[b0.tk] + '</h1><p class="sub">고친 내용은 이 기기에만 저장되고, 문제(철자 쓰기, 뜻 쓰기, 객관식)에도 바로 반영돼요. 진도 탭의 ‘고친 내용’에서 친구에게 보내거나 모두에게 반영할 수 있어요.</p>' +
+    '<label class="lbl" for="ed-t">' + (b0.tk === 'abbr' ? '약어' : b0.tk === 'part' ? '조각' : '영어 단어') + '</label><input id="ed-t" lang="en" value="' + esc(c.t) + '" autocapitalize="off" spellcheck="false">' +
+    (b0.tk === 'abbr' ? '<label class="lbl" for="ed-full">풀이 (영어)</label><input id="ed-full" lang="en" value="' + esc(c.full || '') + '">' : '') +
+    '<label class="lbl" for="ed-ko">한글<span>같은 뜻의 다른 말은 · 로 이어 써요 (예: 신장·콩팥). 뜻 쓰기 채점에 모두 인정돼요</span></label><input id="ed-ko" value="' + esc(c.ko || '') + '">' +
+    '<label class="lbl" for="ed-mean">뜻 풀이<span>쉬운 말로 풀어 쓴 뜻 (없어도 돼요)</span></label><input id="ed-mean" value="' + esc(c.mean || '') + '">' +
+    '<label class="lbl">시험 중요도</label>' + prSeg('ed:' + p.id, c.pr) +
+    '<label class="lbl" for="ed-mine">내 암기법<span>직접 만든 암기법이 가장 오래 남아요. 가장 먼저 보여요</span></label><textarea id="ed-mine" rows="2" placeholder="예: 위에 **가스** 찼다 = gastr/o">' + esc(SS().mine[p.id] || '') + '</textarea>' +
+    '<label class="lbl" for="ed-mn">암기 요령<span>한 줄에 하나 · 종류 | 문장 · **굵게**</span></label><textarea id="ed-mn" rows="3">' + esc(c.mn.map(m => (m.k ? m.k + ' | ' : '') + m.s).join('\n')) + '</textarea>' +
+    '<label class="lbl" for="ed-note">보완 메모</label><textarea id="ed-note" rows="2">' + esc(c.note || '') + '</textarea>' +
+    '<div class="row-btns"><button class="btn primary" data-act="saveTerm" data-arg="' + p.id + '">저장</button>' +
+    (has ? '<button class="btn" data-act="resetEdit" data-arg="' + p.id + '">' + (R.t.confirm === 'reset-' + p.id ? '한 번 더 누르면 되돌려요' : '원래 내용으로 되돌리기') + '</button>' : '') + '</div>' +
+    (has ? '<details class="why" style="margin-top:20px"><summary>원래 내용 보기</summary><p><b lang="en">' + esc(o.t) + '</b> ' + esc(b.ko) + ' ' + starsHTML(o.pr) + '</p>' + (b.mean ? '<p>' + esc(b.mean) + '</p>' : '') + memoHTML(b.mn) + '</details>' : '') + '</section>';
   return subBar('내용 수정') + '<section><h1 class="h-sm">' + esc(c.t) + '</h1><p class="sub">고친 내용은 이 기기에만 저장되고, 원래 내용으로 언제든 되돌릴 수 있어요. 설명·요약·암기 요령을 고치면 이 개념의 복습을 처음부터 다시 해요. 진도 탭의 ‘고친 내용’에서 친구에게 보내거나 모두에게 반영할 수 있어요.</p>' +
     '<label class="lbl" for="ed-t">제목</label><input id="ed-t" value="' + esc(c.t) + '">' +
     '<label class="lbl">시험 중요도<span>교수님이 강조했으면 올리고, 덜 중요하면 내려요. 공부 모드 범위가 바로 바뀌어요</span></label>' + prSeg('ed:' + p.id, c.pr) +
@@ -2414,11 +2730,30 @@ V.edit = p => {
     (has ? '<button class="btn" data-act="resetEdit" data-arg="' + p.id + '">' + (R.t.confirm === 'reset-' + p.id ? '한 번 더 누르면 되돌려요' : '원래 내용으로 되돌리기') + '</button>' : '') + '</div>' +
     (has ? '<details class="why" style="margin-top:20px"><summary>원래 내용 보기</summary><p><b>' + esc(o.t) + '</b> ' + starsHTML(o.pr) + '</p>' + sumHTML(b) + memoHTML(b.mn) + (b.note ? '<p class="c-note">' + esc(b.note) + '</p>' : '') + '</details>' : '') + '</section>';
 };
+/* ───────── 내 단어 추가 (단어장 과목) ───────── */
+function mycTerm(p, isNew, m, u0){
+  const d = m || { u: u0 && X.umap[u0] ? u0 : (X.units[2] || X.units[0]).id, tk: R.t.myTk || 'word', en: '', ko: '', full: '', mean: '', parts: '', pr: 2, mn: [], note: '' };
+  const tk = isNew ? (R.t.myTk || 'word') : d.tk;
+  return subBar(isNew ? '내 단어 추가' : '내 단어 고치기') + '<section><p class="sub">수업에서 나온 단어를 직접 넣어요. 넣으면 철자 쓰기, 뜻 쓰기, 객관식 문제가 저절로 만들어지고 복습에도 들어가요. 이 기기에만 저장돼요.</p>' +
+    (isNew ? '<div class="seg sm" role="group" aria-label="종류">' + [['word', '단어'], ['part', '조각'], ['abbr', '약어']].map(z => '<button data-act="mytk" data-arg="' + z[0] + '" aria-pressed="' + (tk === z[0]) + '">' + z[1] + '</button>').join('') + '</div>' : '') +
+    '<label class="lbl" for="my-u">장</label><select id="my-u">' + X.units.map(u => '<option value="' + u.id + '"' + (u.id === d.u ? ' selected' : '') + '>' + u.n + '. ' + esc(u.title) + '</option>').join('') + '</select>' +
+    '<label class="lbl" for="my-en">' + (tk === 'abbr' ? '약어' : tk === 'part' ? '조각 (예: hepat/o, -itis, peri-)' : '영어 단어') + '</label><input id="my-en" lang="en" autocapitalize="off" spellcheck="false" value="' + esc(d.en || '') + '">' +
+    (tk === 'abbr' ? '<label class="lbl" for="my-full">풀이 (영어, 없어도 돼요)</label><input id="my-full" lang="en" value="' + esc(d.full || '') + '">' : '') +
+    '<label class="lbl" for="my-ko">한글<span>같은 뜻의 다른 말은 · 로 (예: 충수염·맹장염)</span></label><input id="my-ko" value="' + esc(d.ko || '') + '">' +
+    (tk === 'word' ? '<label class="lbl" for="my-parts">조각<span>+ 로 이어요 · 앱에 있는 조각이면 뜻이 저절로 붙어요 (없어도 돼요)</span></label><input id="my-parts" lang="en" autocapitalize="off" spellcheck="false" placeholder="예: hepat/o+-itis" value="' + esc(d.parts || '') + '">' : '') +
+    '<label class="lbl" for="my-mean">뜻 풀이 (없어도 돼요)</label><input id="my-mean" value="' + esc(d.mean || '') + '">' +
+    '<label class="lbl">중요도</label>' + prSeg('my:' + (m ? m.id : 'new'), clampPr(d.pr)) +
+    '<label class="lbl" for="my-mn">암기 요령 (없어도 돼요)</label><input id="my-mn" value="' + esc((d.mn || []).map(z => (z.k ? z.k + ' | ' : '') + z.s).join(' / ')) + '" placeholder="예: 소리 | 위에 **가스** 찼다">' +
+    '<div class="row-btns"><button class="btn primary" data-act="mytsave" data-arg="' + (m ? m.id : 'new') + '">저장</button>' + (m ? '<button class="btn danger" data-act="mycdel" data-arg="' + m.id + '">' + (R.t.confirm === 'mycdel-' + m.id ? '한 번 더 누르면 지워요' : '지우기') + '</button>' : '') + '</div>' +
+    (isNew ? '<h3 class="h3">여러 개 한 번에 붙여넣기 <span>한 줄에 하나 · 영어, 한글 (뜻 풀이는 세 번째 칸)</span></h3><textarea id="my-bulk" rows="6" lang="en" placeholder="hepatitis, 간염\ncholecystitis, 담낭염, 쓸개에 생긴 염증"></textarea><button class="btn" data-act="mybulk">붙여넣은 단어 모두 넣기</button>' : '') +
+    '<p class="note">교재나 교수님 자료를 통째로 옮기지 말고 시험에 나올 단어만 넣으세요. 내 말로 정리하면 더 잘 외워져요.</p></section>';
+}
 /* ───────── 내 개념 추가 ───────── */
 V.myc = p => {
   const isNew = !p.id || p.id === 'new' || /^new:/.test(p.id); const m = isNew ? null : (SS().myc || []).find(x => x.id === p.id);
   if (!isNew && !m) return subBar('내 개념') + '<p class="empty">개념을 찾을 수 없어요.</p>';
   const u0 = isNew && /^new:/.test(p.id) ? p.id.slice(4) : null;
+  if (X.kind === 'terms') return mycTerm(p, isNew, m, u0);
   const d = m || { u: u0 && X.umap[u0] ? u0 : X.units[0].id, t: '', pr: 2, ex: '', sum: [], mn: [], note: '', ox: [] };
   const oxTxt = (d.ox || []).map(o => o[0] + ' | ' + (o[1] ? 'O' : 'X')).join('\n');
   return subBar(isNew ? '내 개념 추가' : '내 개념 고치기') + '<section><p class="sub">교재나 수업에서 빠진 내용을 직접 넣어요. 넣은 개념은 새 개념 순서, 복습, 목차, 암기노트에 들어가요. 이 기기에만 저장되고, 진도 탭의 ‘고친 내용’에서 친구에게 보내거나 모두에게 반영할 수 있어요.</p>' +
@@ -2449,7 +2784,7 @@ function fixCounts(){
   return { ce: Object.keys(s.edits || {}).filter(k => X.cmap[k] && !X.cmap[k].mine).length, my: (s.myc || []).length,
     qe: Object.keys(s.qe || {}).filter(k => X.qmap[k]).length, qh: Object.keys(s.qh || {}).filter(k => X.qmap[k]).length };
 }
-const FIELD_LABEL = { t: '제목', pr: '중요도', ex: '설명', sum: '요약', mn: '암기 요령', note: '보완 메모' };
+const FIELD_LABEL = { t: '제목', pr: '중요도', ex: '설명', sum: '요약', mn: '암기 요령', note: '보완 메모', ko: '한글', mean: '뜻 풀이', full: '풀이' };
 function fixPayload(){ const s = SS(); return { app: 'cheongjin-note', kind: 'fixes', v: 1, sid: X.id, title: X.title, ts: Date.now(), edits: s.edits || {}, myc: s.myc || [], qe: s.qe || {}, qh: Object.keys(s.qh || {}) }; }
 function buildFix(){
   const s = SS(); const fx = JSON.parse(JSON.stringify(X.fix || {}));
@@ -2460,7 +2795,11 @@ function buildFix(){
     const ai = fx.add.findIndex(z => z.id === id);
     if (ai >= 0) Object.assign(fx.add[ai], o); else fx.concepts[id] = Object.assign(fx.concepts[id] || {}, o);
   });
-  (s.myc || []).forEach(m => { if (fx.add.some(z => z.id === m.id)) return; fx.add.push({ id: m.id, u: m.u, t: m.t, pr: clampPr(m.pr), ex: m.ex || '', sum: m.sum || [], mn: m.mn || [], note: m.note || '', ox: m.ox || [], kw: m.kw || [m.t] }); });
+  (s.myc || []).forEach(m => {
+    if (fx.add.some(z => z.id === m.id)) return;
+    if (m.tk) fx.add.push({ id: m.id, u: m.u, tk: m.tk, en: m.en, ko: m.ko, full: m.full || '', mean: m.mean || '', parts: m.parts || '', pr: clampPr(m.pr), mn: m.mn || [], note: m.note || '' });
+    else fx.add.push({ id: m.id, u: m.u, t: m.t, pr: clampPr(m.pr), ex: m.ex || '', sum: m.sum || [], mn: m.mn || [], note: m.note || '', ox: m.ox || [], kw: m.kw || [m.t] });
+  });
   Object.keys(s.qe || {}).forEach(id => { fx.qs[id] = Object.assign(fx.qs[id] || {}, s.qe[id]); });
   fx.hide = Array.from(new Set(fx.hide.concat(Object.keys(s.qh || {}))));
   return fx;
@@ -2476,9 +2815,9 @@ V.fixes = () => {
   const s = SS(), n = fixCounts(), tot = n.ce + n.my + n.qe + n.qh, fx = X.fix;
   let h = subBar('고친 내용 · 내 개념') + '<section><p class="sub">이 기기에서 고치고 보탠 내용이에요. 친구에게 보내거나, 받은 것을 합치거나, 모두의 앱에 반영할 파일을 만들 수 있어요.</p>' +
     '<div class="stats4">' + [['고친 개념', n.ce], ['내 개념', n.my], ['고친 문제', n.qe], ['뺀 문제', n.qh]].map(z => '<div><b class="mono">' + z[1] + '</b><span>' + z[0] + '</span></div>').join('') + '</div>' +
-    '<button class="btn" data-act="mycnew" data-arg="">' + ICON.edit + '내 개념 추가하기</button>' +
+    '<button class="btn" data-act="mycnew" data-arg="">' + ICON.edit + (X.kind === 'terms' ? '내 단어 추가하기' : '내 개념 추가하기') + '</button>' +
     '<p class="hint">개념 고치기는 개념 카드의 연필 버튼, 문제 고치기는 문제를 푼 뒤 해설 아래 ‘문제가 이상해요?’에서 해요.</p>';
-  if (n.my) h += '<h3 class="h3">내 개념 <span>' + n.my + '개</span></h3><div class="list">' + s.myc.map(m => lrow('go', 'concept:' + m.id, m.t, (X.umap[m.u] ? X.umap[m.u].n + '단원 · ' : '') + '★'.repeat(clampPr(m.pr)) + ' · ' + ST_LABEL[status(m.id)])).join('') + '</div>';
+  if (n.my) h += '<h3 class="h3">내 개념 <span>' + n.my + '개</span></h3><div class="list">' + s.myc.map(m => lrow('go', 'concept:' + m.id, m.t || ((m.en || '') + ' ' + (m.ko || '')), (X.umap[m.u] ? X.umap[m.u].n + '단원 · ' : '') + '★'.repeat(clampPr(m.pr)) + ' · ' + ST_LABEL[status(m.id)])).join('') + '</div>';
   if (n.ce) h += '<h3 class="h3">고친 개념 <span>' + n.ce + '개</span></h3><div class="list">' + Object.keys(s.edits).filter(k => X.cmap[k] && !X.cmap[k].mine).map(k => lrow('go', 'concept:' + k, X.cmap[k].t, X.umap[X.cmap[k].u].n + '단원 · 고친 곳: ' + Object.keys(s.edits[k]).map(f => FIELD_LABEL[f]).filter(Boolean).join(', '))).join('') + '</div>';
   const qids = Array.from(new Set(Object.keys(s.qe || {}).concat(Object.keys(s.qh || {})))).filter(id => X.qmap[id]);
   if (qids.length) h += '<h3 class="h3">고친 문제 · 뺀 문제 <span>' + qids.length + '개</span></h3><div class="list">' + qids.map(id => { const q = X.qmap[id]; return lrow('go', 'qedit:' + id, q.q.length > 50 ? q.q.slice(0, 50) + '…' : q.q, (s.qh[id] ? '뺀 문제' : '고친 문제') + (q.u && X.umap[q.u] ? ' · ' + X.umap[q.u].n + '단원' : '')); }).join('') + '</div>';
@@ -2504,7 +2843,7 @@ V.toc = () => {
   let h = subBar('목차') + '<section class="toc"><p class="sub">공부할 단원이나 개념을 고르세요. ‘고른 것 공부’를 누르면 그 범위 안에서 공부하고, 범위가 저장돼서 ‘이어서 공부하기’도 그 안에서 진행돼요.' + (modeOf() !== 'all' ? ' 지금은 <b>' + MODES[modeOf()].name + '</b> 모드라 ' + MODES[modeOf()].range + '가 아닌 개념은 흐리게 보여요. 골라서 공부할 수는 있어요.' : '') + '</p>' +
     '<div class="tlegend"><span><b class="tck on sm">✓</b>고름</span><span><i class="wk">!</i>약함 (정답률 낮음·착각)</span><span>괄호 = 푼 문제 수</span><span>' + ADD_TAG + '새로 추가된 내용</span></div>' +
     '<div class="tlegend prl"><span><span class="prs p3">★★★</span>자주 출제</span><span><span class="prs p2">' + starsHTML(2) + '</span>중요</span><span><span class="prs p1">' + starsHTML(1) + '</span>기본</span></div>' +
-    '<div class="chips-wrap tsel"><button class="chip-btn" data-act="tselq" data-arg="all">전체 고르기</button><button class="chip-btn" data-act="tselq" data-arg="none">모두 해제</button><button class="chip-btn" data-act="tselq" data-arg="top"><span class="prs p3">★★★</span> 자주 출제</button><button class="chip-btn" data-act="tselq" data-arg="top2">★★ 이상</button>' + (X.concepts.some(c => c.add) && !addOff() ? '<button class="chip-btn" data-act="tselq" data-arg="add">추가된 내용</button>' : '') + (X.concepts.some(c => c.mine) ? '<button class="chip-btn" data-act="tselq" data-arg="mine">내 개념</button>' : '') + '<button class="chip-btn" data-act="tselq" data-arg="new">안 배운 것</button><button class="chip-btn" data-act="tselq" data-arg="weak">약한 것</button></div>';
+    '<div class="chips-wrap tsel"><button class="chip-btn" data-act="tselq" data-arg="all">전체 고르기</button><button class="chip-btn" data-act="tselq" data-arg="none">모두 해제</button><button class="chip-btn" data-act="tselq" data-arg="top"><span class="prs p3">★★★</span> 자주 출제</button><button class="chip-btn" data-act="tselq" data-arg="top2">★★ 이상</button>' + (X.concepts.some(c => c.add) && !addOff() ? '<button class="chip-btn" data-act="tselq" data-arg="add">추가된 내용</button>' : '') + (X.concepts.some(c => c.mine) ? '<button class="chip-btn" data-act="tselq" data-arg="mine">내 ' + (X.kind === 'terms' ? '단어' : '개념') + '</button>' : '') + (X.kind === 'terms' ? '<button class="chip-btn" data-act="tselq" data-arg="k:part">조각만</button><button class="chip-btn" data-act="tselq" data-arg="k:word">단어만</button><button class="chip-btn" data-act="tselq" data-arg="k:abbr">약어만</button>' : '') + '<button class="chip-btn" data-act="tselq" data-arg="new">안 배운 것</button><button class="chip-btn" data-act="tselq" data-arg="weak">약한 것</button></div>';
   X.units.forEach(u => {
     const us = unitStats(u); const ids = u.concepts.filter(addVisible).map(c => c.id); const n = ids.filter(id => sel.has(id)).length;
     const st = n === 0 ? '' : n === ids.length ? 'on' : 'part';
@@ -2516,7 +2855,7 @@ V.toc = () => {
     if (open[u.id]) h += '<ul class="tlist">' + u.concepts.filter(addVisible).map(c => {
       const s = status(c.id); const a = acc[c.id]; const ap = a ? Math.round(a.ok / a.att * 100) : null; const wk = weak.has(c.id) || (ap != null && ap < 60);
       return '<li class="tc' + (sel.has(c.id) ? ' sel' : '') + (inRange(c) ? '' : ' out') + '"><button class="tck' + (sel.has(c.id) ? ' on' : '') + '" data-act="tpick" data-arg="' + c.id + '" aria-pressed="' + sel.has(c.id) + '" aria-label="' + esc(c.t) + ' 고르기">' + (sel.has(c.id) ? '✓' : '') + '</button>' +
-        '<button class="tc-t" data-act="go" data-arg="concept:' + c.id + '"><span class="tc-name"><span class="tc-n mono">' + u.n + '-' + c.n + '</span>' + prMark(c) + (wk ? '<i class="wk">!</i>' : '') + esc(c.t) + cTags(c) + '</span>' +
+        '<button class="tc-t" data-act="go" data-arg="concept:' + c.id + '"><span class="tc-name"><span class="tc-n mono">' + u.n + '-' + c.n + '</span>' + prMark(c) + (wk ? '<i class="wk">!</i>' : '') + esc(c.t) + koTag(c) + cTags(c) + '</span>' +
         '<span class="tc-m"><span class="chip st-' + s + '">' + (s === 'new' ? '안 배움' : ST_LABEL[s]) + '</span>' + (ap != null ? '<span class="' + (ap < 60 ? 'low' : '') + '">정답률 ' + ap + '% (' + a.att + ')</span>' : '<span>문제 기록 없음</span>') + (inRange(c) ? '' : '<span class="outc">' + MODES[modeOf()].name + ' 범위 밖</span>') + '</span></button></li>';
     }).join('') + '</ul>';
     h += '</div>';
@@ -2531,7 +2870,7 @@ function searchRes(q0){
   const q = nospace(q0); if (!q) return '<p class="hint">예: 웨버, 쿠스마울, 흉골각, 곤봉지, 수포음</p>';
   const cs = X.concepts.map(c => C(c.id)).filter(c => nospace(c.t).includes(q) || (c.kw || []).some(k => nospace(k).includes(q)) || (c.sum || []).some(s => nospace(s).includes(q)) || mnList(c).some(m => nospace(plain(m.s) + (m.k || '')).includes(q)) || nospace(c.ex).includes(q)).slice(0, 30);
   const qs = allQ().concat(gcQs()).filter(x => nospace(x.q).includes(q) || x.o.some(o => nospace(o).includes(q))).slice(0, 30);
-  return (cs.length ? '<h3 class="h3">개념 <span>' + cs.length + '개</span></h3><div class="list">' + cs.map(c => lrow('go', 'concept:' + c.id, c.t, X.umap[c.u].n + '단원 · ' + '★'.repeat(c.pr) + ' ' + PR_LABEL[c.pr] + ' · ' + ST_LABEL[status(c.id)], { tag: cTags(c) })).join('') + '</div>' : '') +
+  return (cs.length ? '<h3 class="h3">개념 <span>' + cs.length + '개</span></h3><div class="list">' + cs.map(c => lrow('go', 'concept:' + c.id, c.t + (c.tk ? ' · ' + koMain(c.ko) : ''), X.umap[c.u].n + '단원 · ' + '★'.repeat(c.pr) + ' ' + PR_LABEL[c.pr] + ' · ' + ST_LABEL[status(c.id)], { tag: cTags(c) })).join('') + '</div>' : '') +
     (qs.length ? '<h3 class="h3">문제 <span>' + qs.length + '개</span></h3><div class="list">' + qs.map(x => lrow('go', 'qview:' + x.id, x.q.length > 60 ? x.q.slice(0, 60) + '…' : x.q, (x.gc ? '실제 기출' : x.type === 'ox' ? 'O/X' : '객관식') + (unlocked(x) ? '' : ' · 아직 안 배운 내용'))).join('') + '</div>' : '') +
     (!cs.length && !qs.length ? '<p class="empty">찾는 내용이 없어요.</p>' : '');
 }
@@ -2591,7 +2930,7 @@ Object.assign(ACT, {
     const pick = a === 'all' ? () => true : a === 'none' ? () => false : a === 'new' ? c => !isLearned(c.id)
       : a === 'top' ? c => c.pr === 3 : a === 'top2' ? c => c.pr >= 2 : a === 'add' ? c => isAdd(c)
       : c => weak.has(c.id) || (acc[c.id] && acc[c.id].ok / acc[c.id].att < 0.6);
-    R.t.sel = X.concepts.filter(addVisible).filter(a === 'mine' ? c => c.mine : pick).map(c => c.id);
+    R.t.sel = X.concepts.filter(addVisible).filter(a === 'mine' ? c => c.mine : /^k:/.test(a) ? c => c.tk === a.slice(2) : pick).map(c => c.id);
     if (a === 'add' && !R.t.sel.length) toast('추가된 내용이 아직 없어요');
     if (a === 'weak' && !R.t.sel.length) toast('아직 약한 개념이 없어요. 문제를 풀면 정답률이 낮은 개념이 여기에 잡혀요');
     if (a !== 'none') { const o = R.t.tocOpen || (R.t.tocOpen = {}); X.units.forEach(u => { if (u.concepts.some(c => R.t.sel.includes(c.id))) o[u.id] = true; }); }
@@ -2611,6 +2950,7 @@ Object.assign(ACT, {
   speak: a => {
     const p = a.split(':'); const c = C(p[0]); const lv = +p[1];
     if (!('speechSynthesis' in window)) { toast('이 기기에서는 음성 읽기를 쓸 수 없어요'); return; }
+    if (c.tk) { sayEn(c.t).then(() => say(koMain(c.ko))); return; }
     const text = lv === 0 ? c.t + '. ' + c.ex.replace(/\n/g, ' ') : lv === 2 ? mnList(c).map(m => m.s).join('. ') : c.t + '. ' + c.sum.join('. ');
     try { speechSynthesis.cancel(); } catch (e) {} say(text);
   },
@@ -2652,8 +2992,46 @@ Object.assign(ACT, {
     applyLocal(X); R.sheetCache = null; R.t.prFor = null; save(); back(); toast('저장했어요');
   },
   resetEdit: a => { if (R.t.confirm !== 'reset-' + a) { R.t.confirm = 'reset-' + a; render(); return; } delete SS().edits[a]; R.t.confirm = null; R.t.prFor = null; applyLocal(X); R.sheetCache = null; save(); render(); toast('원래 내용으로 되돌렸어요'); },
+  saveTerm: a => {
+    const b = X.cmap[a]; const o = b.o0 || b; const v = id => (($('#' + id) || {}).value || '').trim();
+    const mine = v('ed-mine'); if (mine) SS().mine[a] = mine; else delete SS().mine[a];
+    const mn = ($('#ed-mn').value || '').split('\n').map(l => l.trim()).filter(Boolean).map(l => { const i = l.indexOf('|'); return i >= 0 ? { k: l.slice(0, i).trim(), s: l.slice(i + 1).trim() } : { k: '', s: l }; });
+    const t = v('ed-t'), ko = v('ed-ko'), mean = v('ed-mean'), note = v('ed-note'), full = $('#ed-full') ? v('ed-full') : null;
+    const pr = R.t.prFor === 'ed:' + a ? R.t.prPick : o.pr;
+    if (!t || !ko) { toast('영어와 한글은 비워 둘 수 없어요'); return; }
+    const e = {};
+    if (t !== o.t) e.t = t; if (ko !== (b.ko || '')) e.ko = ko; if (mean !== (b.mean || '')) e.mean = mean; if (full != null && full !== (b.full || '')) e.full = full;
+    if (pr && pr !== o.pr) e.pr = pr; if (note !== (b.note || '')) e.note = note;
+    if (!same(mnKS(mn), mnKS(b.mn))) e.mn = mn;
+    const p0 = SS().edits[a] || {}; const changed = (e.t || o.t) !== (p0.t || o.t) || (e.ko || b.ko) !== (p0.ko || b.ko);
+    if (Object.keys(e).length) SS().edits[a] = e; else delete SS().edits[a];
+    if (changed && isLearned(a)) { const s = crec(a); s.step = 0; s.due = nextDue(0, Date.now()); s.lv0 = true; }
+    applyLocal(X); R.sheetCache = null; R.t.prFor = null; save(); back(); toast('저장했어요. 문제에도 반영됐어요');
+  },
+  sayen: a => { const c = C(a); if (c) sayEn(c.t); },
   prset: (a, el) => { R.t.prPick = +a; const g = el && el.closest('.pr-seg'); if (g) g.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.arg === a))); },
   mycnew: a => go('myc', { id: 'new:' + (a || '') }),
+  mytk: a => { R.t.myTk = a; render(); },
+  mytsave: a => {
+    const v = id => (($('#' + id) || {}).value || '').trim();
+    const en = v('my-en'), ko = v('my-ko'); if (!en || !ko) { toast('영어와 한글을 써 주세요'); return; }
+    const list = SS().myc || (SS().myc = []); const old = a === 'new' ? null : list.find(x => x.id === a);
+    const tk = old ? old.tk : (R.t.myTk || 'word');
+    const mn = v('my-mn') ? v('my-mn').split(' / ').map(l => { const i = l.indexOf('|'); return i >= 0 ? { k: l.slice(0, i).trim(), s: l.slice(i + 1).trim() } : { k: '', s: l.trim() }; }) : [];
+    const pr = R.t.prFor === 'my:' + a ? R.t.prPick : (old ? old.pr : 2);
+    const d = { tk, u: v('my-u') || X.units[0].id, en, ko, full: v('my-full'), mean: v('my-mean'), parts: v('my-parts').replace(/\s*\+\s*/g, '+'), pr, mn, note: '' };
+    let id = a; if (!old) { id = uid('my'); list.push(Object.assign({ id, ts: Date.now() }, d)); } else Object.assign(old, d);
+    applyLocal(X); R.sheetCache = null; R.t.prFor = null; save(); R.stack.pop(); if (!old) go('concept', { id }); else render(true);
+    toast(old ? '고쳤어요' : '넣었어요. 문제도 저절로 만들어졌어요');
+  },
+  mybulk: () => {
+    const raw = (($('#my-bulk') || {}).value || '').split('\n').map(l => l.trim()).filter(Boolean); if (!raw.length) { toast('붙여넣을 단어가 없어요'); return; }
+    const u = (($('#my-u') || {}).value) || X.units[0].id; const list = SS().myc || (SS().myc = []); let n = 0, bad = 0;
+    const have = new Set(X.concepts.map(c => normEn(c.t)));
+    raw.forEach(l => { const p = l.split(/\s*[,\t]\s*/); if (p.length < 2 || !p[0] || !p[1]) { bad++; return; } if (have.has(normEn(p[0]))) { bad++; return; } have.add(normEn(p[0])); list.push({ id: uid('my'), ts: Date.now(), tk: R.t.myTk || 'word', u, en: p[0], ko: p[1], mean: p[2] || '', full: '', parts: '', pr: 2, mn: [], note: '' }); n++; });
+    applyLocal(X); R.sheetCache = null; save(); R.stack.pop(); render(true);
+    toast(n + '개를 넣었어요' + (bad ? ' · ' + bad + '줄은 형식이 맞지 않거나 이미 있는 단어라 건너뛰었어요' : ''));
+  },
   mycsave: a => {
     const v = id => (($('#' + id) || {}).value || '').trim(); const lines = id => v(id).split('\n').map(l => l.trim()).filter(Boolean);
     const t = v('my-t'), sum = lines('my-sum'), ex = v('my-ex');
@@ -2802,6 +3180,7 @@ function afterRender(){
   if (sc && sc.name === 'imgmask') bindMask();
   if ($('#stor')) fillStorage();
   if (sc && sc.name === 'search') { const i = $('#search-q'); if (i && document.activeElement !== i && !R.t.sq) i.focus(); }
+  const w = $('#wr-in'); if (w) { try { w.focus({ preventScroll: true }); const n = w.value.length; w.setSelectionRange(n, n); } catch (e) {} }
 }
 function applySettings(){
   document.documentElement.style.setProperty('--scale', S.set.scale || 1);
@@ -2822,6 +3201,7 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   const t = e.target;
   if ((e.key === 'Enter' || e.key === ' ') && t.getAttribute && t.getAttribute('role') === 'button' && t.dataset.act) { e.preventDefault(); t.click(); return; }
+  if (t.id === 'wr-in' && e.key === 'Enter' && !e.isComposing) { e.preventDefault(); const ns = t.dataset.ns; if (ns === 'mk') { const x = nsState('mk'); if (x) x.st.inp = t.value; ACT.qnext(); } else ACT.wrok(ns); return; }
   if (t.matches && t.matches('input,textarea,select')) return;
   const sc = cur(); if (!sc || !R.sid) return;
   if (sc.name === 'session' && SS().ses) {
@@ -2842,6 +3222,7 @@ document.addEventListener('input', e => {
   else if (t.id === 'pk-q' && R.sheet) { R.sheet.q = t.value; renderSheet(); const i = $('#pk-q'); if (i) { i.focus(); try { i.setSelectionRange(i.value.length, i.value.length); } catch (x) {} } }
   else if (/^gp-/.test(t.id)) { R.t.gp = { round: ($('#gp-round') || {}).value, period: ($('#gp-period') || {}).value, q: ($('#gp-q') || {}).value, a: ($('#gp-a') || {}).value }; }
   else if (t.id === 'bk-in') { R.t.bkRaw = null; }
+  else if (t.id === 'wr-in' && t.dataset.ns === 'mk') { const x = nsState('mk'); if (x) x.st.inp = t.value; }
 });
 document.addEventListener('change', e => {
   const t = e.target;
@@ -2860,6 +3241,8 @@ document.addEventListener('change', e => {
     save(); render(); return;
   }
   if (t.id === 'pk-other' && R.sheet) { R.sheet.other = t.checked; renderSheet(); }
+  if (t.id === 'qb-u' && R.sid) { qbState().u = t.value; save(); render(); }
+  if (t.id === 'qb-exam' && R.sid) { qbState().exam = t.checked; save(); }
   if (t.id === 'ed-hq' && R.ed) R.ed.hq = t.checked;
 });
 function pauseTimers(){
