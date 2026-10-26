@@ -353,6 +353,7 @@ const ICON = {
   rotR: SVG('<path d="M20 9a8 8 0 1 0-1.6 6"/><path d="M20 4v5h-5"/>', 20),
   up: SVG('<path d="M6 15l6-6 6 6"/>', 18),
   trash: SVG('<path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/>', 20),
+  home: SVG('<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>'),
   pin: SVG('<circle cx="12" cy="10" r="3"/><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/>', 20)
 };
 const ECG = '<svg class="ecg" viewBox="0 0 200 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" points="0,27 46,27 54,27 60,20 66,27 80,27 86,5 93,37 99,27 114,27 123,21 132,27 200,27"/></svg>';
@@ -415,8 +416,9 @@ function subjTop(){
 function subBar(title, right){
   return '<header class="top sub"><button class="backbtn" data-act="back" aria-label="이전 화면">' + ICON.back + '<span>이전</span></button><h2>' + esc(title) + '</h2><div class="r">' + (right || '') + '</div></header>';
 }
-function fullBar(inner, act){
-  return '<header class="ses-top"><button class="backbtn" data-act="' + (act || 'back') + '" aria-label="이전 화면">' + ICON.back + '<span>이전 화면</span></button>' + inner + '</header>';
+const HOME_BTN = '<button class="icon-btn home-btn" data-act="home" aria-label="공부 홈으로" title="공부 홈으로">' + ICON.home + '</button>';
+function fullBar(inner, act, noHome){
+  return '<header class="ses-top"><button class="backbtn" data-act="' + (act || 'back') + '" aria-label="이전 화면">' + ICON.back + '<span>이전 화면</span></button>' + inner + (noHome || !R.sid ? '' : HOME_BTN) + '</header>';
 }
 function lrow(act, arg, title, meta, opt){
   opt = opt || {};
@@ -580,7 +582,7 @@ function vSubjects(){
       '<span class="meter" aria-hidden="true"><i style="width:' + st.prog + '%"></i><i class="m2" style="width:' + st.knownP + '%"></i></span></button>' +
       '<button class="btn primary subj-go" data-act="enterGo" data-arg="' + sid + '">' + (ses ? '이어서 공부' : st.L ? '이어서 공부' : '공부 시작') + '</button></article>';
   }).join('');
-  if (LOADERR.length) h += '<div class="notice"><b>일부 파일을 불러오지 못했어요</b><p>' + LOADERR.map(esc).join(', ') + '</p></div>';
+  if (LOADERR.length) h += '<div class="notice"><b>일부 과목 파일을 불러오지 못했어요</b><p>' + LOADERR.map(esc).join(', ') + '</p><p>다른 과목은 그대로 쓸 수 있어요.</p></div>';
   h += '<div class="list">' + lrow('go', 'settings:', '설정', '글자 크기 · 화면 · 그림 안내') + lrow('go', 'backup:', '기록 백업 · 불러오기', backupMeta(), { hl: !S.lastBackup || Date.now() - S.lastBackup > 7 * DAY }) + '</div>' +
     '<p class="note">과목은 나중에 계속 추가할 수 있어요. 학습 기록은 이 기기에만 저장되니 일주일에 한 번 백업하세요.</p></section>';
   return h;
@@ -855,6 +857,12 @@ Object.assign(ACT, {
   enterGo: a => { enterSubject(a, 'study'); contSession(); },
   subjects: () => { leaveSubject(); render(true); },
   updok: () => { R.update = null; render(); },
+  home: () => {
+    const top = cur(); const busy = top && ((top.name === 'session' && SS().ses) || (top.name === 'quiz' && SS().qz && !SS().qz.done));
+    R.sheet = null; while (R.stack.length) onLeave(R.stack.pop());
+    R.doneSes = null; R.tab = 'study'; render(true);
+    if (busy) toast('여기까지 저장했어요. 나중에 그 자리부터 이어서 할 수 있어요');
+  },
   cont: () => contSession(),
   start: a => { const i = a.indexOf(':'); startSession(i < 0 ? a : a.slice(0, i), i < 0 ? '' : a.slice(i + 1)); },
   exit: () => {
@@ -995,7 +1003,7 @@ function vQuizResult(z){
   const rs = {}; wrongIds.forEach(id => { const r = z.ans[id] && z.ans[id].reason; if (r) rs[r] = (rs[r] || 0) + 1; });
   const low = Object.keys(by).filter(k => by[k][1] >= 3 && pct(by[k][0], by[k][1]) < 40);
   const verdict = pc >= 60 ? (low.length ? '총점은 합격선(60%) 이상이지만 과락(40% 미만) 과목이 있어요: ' + low.join(', ') : '합격선(60%) 이상이에요') : pc >= 40 ? '과락선은 넘었지만 합격선(60%)까지 ' + (60 - pc) + '%p 남았어요' : '과락선(40%) 아래예요. 틀린 개념부터 다시 봐요';
-  return '<div>' + subBar(z.title) + '<div class="done-card"><div class="eyebrow">결과</div><h2>' + ok + ' / ' + n + ' · ' + pc + '%</h2><p>' + esc(verdict) + '</p>' +
+  return '<div>' + subBar(z.title, HOME_BTN) + '<div class="done-card"><div class="eyebrow">결과</div><h2>' + ok + ' / ' + n + ' · ' + pc + '%</h2><p>' + esc(verdict) + '</p>' +
     '<h3 class="h3">' + (z.mode === 'gset' ? '과목별' : '단원별') + ' 정답률 <span>점선 40% 과락 · 실선 60% 합격</span></h3>' +
     Object.keys(by).map(k => { const v = by[k]; const p2 = pct(v[0], v[1]); return '<div class="ubar"><span>' + esc(k) + '</span><span class="ub"><i class="' + (p2 < 40 ? 'low' : '') + '" style="width:' + p2 + '%"></i></span><b>' + p2 + '%</b></div>'; }).join('') +
     (Object.keys(rs).length ? '<p class="hint">틀린 이유: ' + Object.keys(rs).map(k => k + ' ' + rs[k]).join(' · ') + (rs['잘못 읽음'] ? ' — 문제의 핵심어(옳지 않은 것, 가장 먼저)에 밑줄 긋는 습관을 들여 보세요.' : '') + '</p>' : '') +
@@ -1781,7 +1789,7 @@ async function processImage(img, rot, crop, hq){
 V.imgedit = () => {
   const ed = R.ed; if (!ed) return subBar('그림 편집') + '<p class="empty">편집할 그림이 없어요.</p>';
   const tgt = parseTarget(ed.target);
-  return '<div>' + fullBar('<h2 class="fb-title">그림 편집' + (ed.files.length > 1 ? ' · ' + (ed.idx + 1) + '/' + ed.files.length : '') + '</h2>') +
+  return '<div>' + fullBar('<h2 class="fb-title">그림 편집' + (ed.files.length > 1 ? ' · ' + (ed.idx + 1) + '/' + ed.files.length : '') + '</h2>', null, true) +
     '<p class="eyebrow">' + esc(tgt.gq ? '기출 문제 그림' : (cOf(tgt.sid, tgt.cid) || {}).t || '') + '</p>' +
     '<div class="ed-stage" id="ed-stage"><div class="ed-box" id="ed-box"><canvas id="ed-cv"></canvas><i class="ed-crop" id="ed-crop" hidden></i></div>' + (ed.err ? '<p class="empty">' + esc(ed.err) + '</p>' : (!ed.img ? '<p class="hint center">그림을 여는 중…</p>' : '')) + '</div>' +
     '<p class="hint">손가락으로 끌어서 필요한 부분만 남길 수 있어요.</p>' +
@@ -1861,7 +1869,7 @@ V.imgmark = p => {
     ((m.marks || []).length ? '<p class="hint">이미 찍은 번호 ' + m.marks.length + '개는 새로 찍은 것으로 바뀌어요.</p>' : '') +
     '<button class="btn primary big" data-act="mkstart">번호 찍기 시작</button></section>';
   const name = k.names[k.i];
-  return '<div>' + fullBar('<div class="pbar"><i style="width:' + pct(k.i, k.names.length) + '%"></i></div><span class="mono ses-n">' + Math.min(k.i + 1, k.names.length) + '/' + k.names.length + '</span>') +
+  return '<div>' + fullBar('<div class="pbar"><i style="width:' + pct(k.i, k.names.length) + '%"></i></div><span class="mono ses-n">' + Math.min(k.i + 1, k.names.length) + '/' + k.names.length + '</span>', null, true) +
     '<p class="mk-prompt"><span class="dot-n">' + (k.i + 1) + '</span><span><b>' + esc(name) + '</b> 위치를 누르세요</span></p>' +
     figStage(Object.assign({}, m, { marks: k.marks }), { id: 'mk-stage', cls: 'tap' }) +
     '<div class="row-btns"><button class="btn" data-act="mkskip">건너뛰기</button><button class="btn" data-act="mkundo"' + (k.i ? '' : ' disabled') + '>이전 다시 찍기</button><button class="btn primary" data-act="mkfinish">여기까지 저장</button></div>' +
@@ -1887,7 +1895,7 @@ async function saveMarks(){
 V.imgmask = p => {
   const m = imgMeta(p.id); if (!m) return subBar('글자 가리기') + '<p class="empty">그림을 찾을 수 없어요.</p>';
   let k = R.mask; if (!k || k.id !== m.id) k = R.mask = { id: m.id, masks: (m.masks || []).slice() };
-  return '<div>' + fullBar('<h2 class="fb-title">글자 가리기 · ' + k.masks.length + '곳</h2>') +
+  return '<div>' + fullBar('<h2 class="fb-title">글자 가리기 · ' + k.masks.length + '곳</h2>', null, true) +
     '<p class="sub">그림에 적힌 이름을 손가락으로 끌어서 네모로 가리세요. 연습할 때 가린 곳은 안 보여요.</p>' +
     figStage(Object.assign({}, m, { masks: k.masks }), { id: 'mask-stage', cls: 'tap masking', tmp: 'mask-tmp' }) +
     '<div class="row-btns"><button class="btn" data-act="maskundo"' + (k.masks.length ? '' : ' disabled') + '>되돌리기</button><button class="btn" data-act="maskclear"' + (k.masks.length ? '' : ' disabled') + '>모두 지우기</button><button class="btn primary" data-act="masksave">저장</button></div></div>';
@@ -2363,6 +2371,7 @@ async function boot(){
   const reg = (window.NSA && window.NSA.subjects) || {};
   list.forEach(it => { const d = reg[it.id]; if (d && d.units && d.units.length) { try { SUB[it.id] = buildSubject(d); } catch (e) { LOADERR.push(it.id); } } });
   ORDER = list.map(i => i.id).filter(id => SUB[id]);
+  list.forEach(it => { if (!SUB[it.id] && !LOADERR.includes(it.id)) LOADERR.push((it.title || it.id) + ' 과목 파일 (형식 오류가 있는지 확인)'); });
   await idbOpen(); try { await imgLoadMeta(); } catch (e) {}
   Object.keys(S.subj).forEach(k => { const z = S.subj[k].qz; if (z && z.t0) z.t0 = null; });
   applySettings(); restoreRoute(); render(true);
