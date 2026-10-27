@@ -1,7 +1,7 @@
 {
-  "name": "청진노트 · 간호학 시험공부",
-  "short_name": "청진노트",
-  "description": "간격 반복, 암기 요령, 문제풀이로 공부하는 간호학 시험 대비 앱",
+  "name": "하랑노트 · 하랑이를 위한 간호 공부",
+  "short_name": "하랑노트",
+  "description": "하랑이를 위한 간호학 공부 앱 · 간격 반복, 암기 요령, 문제풀이",
   "lang": "ko",
   "start_url": "./",
   "scope": "./",
@@ -10,8 +10,21 @@
   "background_color": "#edf3f2",
   "theme_color": "#0b766e",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }

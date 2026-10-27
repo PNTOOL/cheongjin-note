@@ -1,4 +1,4 @@
-/* 청진노트 국시형 문제 3: 건강사정 6~7단원 (형식은 health-assessment-q1.js 참고) */
+/* 하랑노트 국시형 문제 3: 건강사정 6~7단원 (형식은 health-assessment-q1.js 참고) */
 NSA.add('health-assessment', { qs: [
   /* ── 6단원: 유방과 주위 림프관 사정 ── */
   { id: 'u6-n01', u: 'u6', c: ['u6c01'], lv: 1,

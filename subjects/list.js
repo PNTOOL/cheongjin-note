@@ -1,4 +1,4 @@
-/* 청진노트 과목 목록
+/* 하랑노트 과목 목록
  *
  * ▶ 과목을 추가하려면 (2단계)
  *   1) 과목 파일을 subjects 폴더에 올려요. (subjects/_template.js 양식 참고)
@@ -37,7 +37,19 @@ window.NSA_LIST = [
     kind: '전공선택',
     files: [
       'subjects/medical-terminology.js',
-      'subjects/medical-terminology-2.js'
+      'subjects/medical-terminology-2.js',
+      'subjects/medical-terminology-en.js'
+    ]
+  },
+  {
+    id: 'pathophysiology-1',
+    title: '병태생리학1',
+    term: '1-2',
+    files: [
+      'subjects/pathophysiology-1.js',
+      'subjects/pathophysiology-1-2.js',
+      'subjects/pathophysiology-1-q1.js',
+      'subjects/pathophysiology-1-q2.js'
     ]
   }
 ];
@@ -61,5 +73,7 @@ window.NSA = window.NSA || {
     var s = this.subjects[id]; if (!s || !part) return;
     (part.units || []).forEach(function (u) { s.units.push(u); });
     ['pairs', 'tables', 'orders', 'numbers'].forEach(function (k) { if (part[k]) s[k] = (s[k] || []).concat(part[k]); });
+    /* 단어장 과목의 영어 설명 (RN 대비): 조각·단어·약어별로 합쳐요 */
+    if (part.en) { s.en = s.en || {}; ['parts', 'words', 'abbr'].forEach(function (k) { if (part.en[k]) s.en[k] = Object.assign(s.en[k] || {}, part.en[k]); }); }
   }
 };

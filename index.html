@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style id="base-reset">:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}[hidden]{display:none!important}img{max-width:100%}</style>
-<title>청진노트</title>
+<title>하랑노트</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="theme-color" content="#0b766e">
-<meta name="description" content="간호학 시험공부 앱 · 간격 반복, 암기 요령, 국시형 문제, 한 장 요약지">
+<meta name="description" content="하랑이를 위한 간호학 공부 앱 · 간격 반복, 암기 요령, 국시형 문제, 한 장 요약지">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gaegu:wght@400;700&family=Hahmlet:wght@600;700&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
@@ -778,6 +778,30 @@ button.dot-n{cursor:pointer;min-width:38px;height:38px;line-height:34px;font-siz
 .qb .check{margin:0;font-size:.875rem;flex-wrap:nowrap;align-items:flex-start}
 .qb .check input{flex:0 0 auto;margin-top:1px}
 .c-title[lang="en"]{font-family:var(--f-body);font-size:1.5rem;overflow-wrap:anywhere}
+/* ───── v7: 영어 설명 (RN 대비) ───── */
+.tm-p small{font-size:.6875rem;color:var(--muted);font-style:italic}
+.tm-enx{margin-top:6px;border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:10px;background:var(--surface);padding:8px 12px 10px;display:grid;gap:4px}
+.tm-enh{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px}
+.tm-enh .lab{font-size:.6875rem;font-weight:700;letter-spacing:.08em;color:var(--blue)}
+.tool.sm{width:34px;height:34px}
+.tm-def{margin:0;font-size:1rem;font-weight:600;line-height:1.45;color:var(--ink)}
+.tm-lay{margin:0;font-size:.875rem;color:var(--ink)}
+.tm-lay .lab{font-size:.6875rem;font-weight:700;color:var(--muted);margin-right:2px}
+.tm-quote{margin:0;font-size:.875rem;font-style:italic;color:var(--accent-strong)}
+.tm-rn{margin:4px 0 0;font-size:.8125rem;color:var(--ink);background:var(--blue-soft);border-radius:8px;padding:6px 9px;line-height:1.5}
+.tm-rn b{color:var(--blue);font-size:.75rem;margin-right:2px}
+.ni-def{font-style:italic;color:#2c5ba3}
+/* ───── v8: 기전 흐름 · 영어 키워드 · 의학용어 연결 ───── */
+.c-en{grid-column:1;margin:0;font-size:.8125rem;color:var(--blue);font-style:italic;line-height:1.4}
+.flow{display:flex;flex-direction:column;align-items:stretch;gap:2px;margin:14px 0 6px;padding:10px 12px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:14px}
+.flow-lab{font-size:.6875rem;font-weight:700;letter-spacing:.06em;color:var(--accent-strong);margin-bottom:4px}
+.flow-st{display:block;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:7px 11px;font-size:.875rem;font-weight:500;line-height:1.4}
+.flow-st.end{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-strong);font-weight:600}
+.flow-st.blank{border:2px dashed var(--warn);background:var(--warn-soft);color:var(--warn);font-weight:700;text-align:center;font-family:var(--f-mono)}
+.flow-ar{font-style:normal;text-align:center;color:var(--muted);font-size:.8125rem;line-height:1.1}
+.qcard .flow{margin:0}
+.tm-links .chip-btn b{font-weight:600}
+.ni-flow{color:#075c55}
 </style>
 </head>
 <body>

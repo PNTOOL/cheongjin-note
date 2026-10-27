@@ -1,4 +1,4 @@
-/* 청진노트 단어장 과목: 의학용어 (2) 소화기계 ~ 임상 약어, 헷갈리는 쌍
+/* 하랑노트 단어장 과목: 의학용어 (2) 소화기계 ~ 임상 약어, 헷갈리는 쌍
  * 형식은 medical-terminology.js와 같아요. NSA.more로 앞 파일의 과목에 장을 이어 붙여요.
  */
 NSA.more('medical-terminology', {

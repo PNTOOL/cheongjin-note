@@ -1,4 +1,4 @@
-/* 청진노트 국시형 문제 2: 건강사정 3~5단원 (형식은 health-assessment-q1.js 참고) */
+/* 하랑노트 국시형 문제 2: 건강사정 3~5단원 (형식은 health-assessment-q1.js 참고) */
 NSA.add('health-assessment', { qs: [
   /* ── 3단원: 머리, 얼굴, 목 검진 ── */
   { id: 'u3-n01', u: 'u3', c: ['u3c01'], lv: 1,
